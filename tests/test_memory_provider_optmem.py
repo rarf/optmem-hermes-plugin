@@ -153,13 +153,29 @@ class TestOptMemProvider:
         res = json.loads(p.handle_tool_call("optmem_wake", {}))
         assert res["count"] >= 1
 
-    def test_prefetch_includes_context_and_pending_nap(self, tmp_path):
+    def test_nap_accepts_legacy_inclusive_display_range(self, tmp_path):
+        p = _make_provider(tmp_path)
+        p.handle_tool_call("optmem_note", {"text": "x"})
+        p.handle_tool_call("optmem_note", {"text": "y"})
+        # The old prompt/schema led callers to send #0-1 as hi=1.
+        res = json.loads(
+            p.handle_tool_call(
+                "optmem_nap", {"lo": 0, "hi": 1, "summary": "xy resumido"}
+            )
+        )
+        assert res["status"] == "compressed"
+        assert res["block"] == "0-1"
+        assert res["hi_exclusive"] == 2
+
+    def test_prefetch_includes_explicit_exclusive_hi(self, tmp_path):
         p = _make_provider(tmp_path)
         p.handle_tool_call("optmem_note", {"text": "x"})
         p.handle_tool_call("optmem_note", {"text": "y"})
         ctx = p.prefetch("")
         assert "OptMem context" in ctx
-        assert "Compression due" in ctx  # a nap is pending after 2 notes
+        assert "Compression due" in ctx
+        assert "lo=0, hi=2" in ctx
+        assert "hi argument is EXCLUSIVE" in ctx
 
     def test_on_memory_write_mirrors_builtin(self, tmp_path):
         p = _make_provider(tmp_path)

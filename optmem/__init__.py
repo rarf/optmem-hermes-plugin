@@ -152,7 +152,7 @@ NAP_SCHEMA = {
         "type": "object",
         "properties": {
             "lo": {"type": "integer", "description": "Block start id (inclusive)."},
-            "hi": {"type": "integer", "description": "Block end id (inclusive)."},
+            "hi": {"type": "integer", "description": "Block end id (EXCLUSIVE). A displayed #8-9 block uses hi=10."},
             "summary": {"type": "string", "description": "One-line compression."},
         },
         "required": ["lo", "hi", "summary"],
@@ -357,8 +357,9 @@ class OptMemProvider(MemoryProvider):
             if nap:
                 (lo, hi), prompt = nap
                 lines.append(
-                    f"[OptMem] Compression due for #{lo}-{hi - 1}. "
-                    "Run optmem_nap with a one-line summary (max 280 bytes):\n"
+                    f"[OptMem] Compression due for displayed range #{lo}-{hi - 1}. "
+                    f"Call optmem_nap(lo={lo}, hi={hi}, summary=...). The hi argument "
+                    "is EXCLUSIVE; max 280 bytes:\n"
                     f"{prompt}"
                 )
             # Query-scoped recall only (no wake re-injection on later turns).
@@ -440,7 +441,7 @@ class OptMemProvider(MemoryProvider):
             if nap:
                 (lo, hi), _ = nap
                 out["nap_due"] = {"lo": lo, "hi": hi}
-                out["note"] = "Run optmem_nap for this block before your next action."
+                out["note"] = "Run optmem_nap for this block before your next action; hi is EXCLUSIVE."
             return _json(out)
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
@@ -472,10 +473,24 @@ class OptMemProvider(MemoryProvider):
             lo = int(args["lo"])
             hi = int(args["hi"])
             summary = args["summary"].strip()
+            # The public contract is [lo, hi), but older prompts and schemas
+            # described the displayed range (#8-9) as if hi were inclusive.
+            # Accept that unambiguous legacy shape so stale callers do not
+            # repeatedly fail with a misleading race message.
+            if self._validate_block(lo, hi):
+                legacy_hi = hi + 1
+                if self._validate_block(lo, legacy_hi) is None:
+                    hi = legacy_hi
+                else:
+                    return tool_error(self._validate_block(lo, hi))
             ok = self._engine.apply_nap(lo, hi, summary)
             if not ok:
-                return tool_error(f"#{lo}-{hi} was settled or forgotten meanwhile.")
-            return _json({"status": "compressed", "block": f"{lo}-{hi}"})
+                return tool_error(
+                    f"no writable summary slot for #{lo}-{hi - 1} "
+                    f"(hi={hi} exclusive); refresh optmem_wake because another "
+                    "nap may have settled or forgotten it."
+                )
+            return _json({"status": "compressed", "block": f"{lo}-{hi - 1}", "hi_exclusive": hi})
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
         except Exception as exc:
