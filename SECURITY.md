@@ -12,7 +12,8 @@ Only the latest minor release receives security updates. Please upgrade to the l
 
 **Please do NOT report security vulnerabilities via public GitHub issues.**
 
-Instead, report them privately to **rarf@github.com** with:
+Instead, report them privately through the repository's security reporting
+channel with:
 
 1. Description of the vulnerability
 2. Steps to reproduce (if applicable)

@@ -9,7 +9,7 @@ description = "OptMem local memory provider for Hermes Agent — append-only, de
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Ronald (rarf)" }]
+authors = [{ name = "OptMem Hermes Plugin contributors" }]
 keywords = ["hermes", "hermes-agent", "memory", "optmem", "agent-memory"]
 classifiers = [
     "Development Status :: 4 - Beta",

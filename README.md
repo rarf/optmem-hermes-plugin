@@ -251,7 +251,7 @@ auto-merge — it alerts you when upstream drifts so you can adapt deliberately.
 - Memory model and on-disk format by **Victor Taelin** —
   [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem).
 - Standalone Hermes integration, Windows locking, BM25 search, and CLI parity
-  by **Ronald (rarf)**.
+  by the project contributors.
 
 ## License
 

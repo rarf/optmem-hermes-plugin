@@ -17,7 +17,7 @@ memory:
   # llm_summary: true
 
 # Optional: custom store location (default: $HERMES_HOME/memory/optmem)
-# memory_dir: "C:/Users/you/MyOptMemStore"
+# memory_dir: "${HERMES_HOME}/memory/optmem"
 
 toolsets:
   - hermes-cli

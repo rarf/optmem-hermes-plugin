@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wake_lines` no longer duplicates the date prefix in rendered output.
 - README: documents auto-compaction, `llm_summary` option, 26 tests, demo.
 
-[0.2.0]: https://github.com/rarf/optmem-hermes-plugin/releases/tag/v0.2.0
+[0.2.0]: ../../releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-08-09
 
@@ -59,4 +59,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rejects entries >280 bytes (matches upstream)
 - No network calls, no external dependencies beyond stdlib + PyYAML
 
-[0.1.0]: https://github.com/rarf/optmem-hermes-plugin/releases/tag/v0.1.0
+[0.1.0]: ../../releases/tag/v0.1.0
