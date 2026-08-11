@@ -98,6 +98,27 @@ hermes gateway restart
 
 That's it. The agent now has permanent memory — no migration, no prompt paste.
 
+### Windows profiles
+
+Hermes profiles keep independent plugin copies. Updating the repository does
+not automatically update already-installed profile copies. After pulling a new
+plugin version on Windows, sync both Python modules into every profile that
+uses OptMem:
+
+```bash
+HERMES_HOME="${HERMES_HOME:-$HOME/AppData/Local/hermes}"
+for profile in default alldrivers-dev alldrivers-devops alldrivers-planner \
+               alldrivers-qa alldrivers-seo casa coach; do
+  target="$HERMES_HOME/profiles/$profile/plugins/optmem"
+  mkdir -p "$target"
+  cp optmem/__init__.py optmem/engine.py "$target/"
+done
+```
+
+Also update the global copy at `$HERMES_HOME/plugins/optmem/` when the default
+installation uses it. Restart long-running Hermes/Desktop/gateway processes
+after syncing; Python keeps already-imported plugin modules in memory.
+
 ---
 
 ## Tools exposed to the agent
