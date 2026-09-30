@@ -27,7 +27,14 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-legacy-config = ["pyyaml>=6.0"]
+# `legacy-config` is an installable optional dependency, so it follows the
+# catalog's supply-chain policy (plugin-catalog/README.md rule 9): an oldest
+# verified floor PLUS a `<next_major` upper bound. PyYAML is a 6.x line, so the
+# ceiling is `<7`. Only needed for the 0.2.0 `plugins.optmem` YAML fallback and
+# CLI config writes; the supported declared-schema path is plain JSON.
+legacy-config = ["pyyaml>=6.0,<7"]
+# dev/build tooling follows a separate (contributor-only) policy; these are not
+# part of the shipped runtime surface.
 dev = [
     "pyyaml>=6.0",
     "setuptools>=77.0",

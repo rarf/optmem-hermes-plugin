@@ -1,46 +1,37 @@
 # OptMem for Hermes
 
-Independent Hermes memory-provider integration of [Victor Taelin's OptMem design](https://github.com/VictorTaelin/OptMem). Not affiliated with or endorsed by upstream.
+![Victor Taelin's original OptMem animation](https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif)
 
-![Victor Taelin's original OptMem design animation](https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif)
+*Original design animation by [Victor Taelin](https://github.com/VictorTaelin/OptMem). This is an independent Hermes integration, not the upstream project.*
 
-Animation by Victor Taelin, linked at an immutable upstream commit, not copied or rehosted. It explains the original design, not a screenshot of this plugin. Upstream ships no LICENSE file; this integration's MIT license does not grant rights to upstream media.
+**Local memory that keeps the history and limits what enters your context.**
+Store durable facts, search them with regex/BM25, and zoom from summaries back to original records. No API key or LLM call is needed by the memory engine.
 
-## What you get
+## Install
 
-- Local append-only records, regex/BM25 retrieval and summary-tree navigation.
-- Hybrid mode alongside native memory, or guarded OptMem-only mode after verified migration and backup.
-- Nine memory tools and the `hermes optmem-hermes` configuration/migration CLI.
-- No API keys or network requests by the memory engine. The wake digest consumes model context.
-
-Summaries are lossy. Raw records remain recoverable, but a later note does not automatically supersede an earlier one. `forget` drops summaries, not raw log records.
-
-## Install and activate
-
-Version 0.3.0 is unreleased and this plugin is not yet in the Hermes catalog. Install a reviewed exact source commit into the environment used by your selected Hermes profile:
+Version **0.3.0** is distributed through GitHub Releases. The plugin is **not yet in the Hermes catalog**. Install into the Python environment used by Hermes:
 
 ```bash
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@<FULL-40-CHAR-COMMIT-SHA>"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.0"
 ```
 
-Set the selected profile's `config.yaml`:
+Select the provider in your profile's `config.yaml`, then restart that profile's Hermes process:
 
 ```yaml
 memory:
   provider: optmem-hermes
 ```
 
-Restart its long-lived Hermes process, then verify:
-
 ```bash
-hermes optmem-hermes version --json
 hermes optmem-hermes status --json
-hermes optmem-hermes check --json
 ```
 
-`check` exits 1 until replacement readiness is satisfied. These checks are read-only. Hybrid is the default.
+## Choose your mode
 
-## Safely replace native memory
+- **Hybrid** (default): OptMem runs alongside native `MEMORY.md` / `USER.md`.
+- **OptMem-only**: replaces native memory injection after verified migration and backup.
+
+To switch safely, inspect the migration plan first:
 
 ```bash
 hermes optmem-hermes migrate --dry-run --json
@@ -49,18 +40,36 @@ hermes optmem-hermes check --json
 hermes optmem-hermes mode optmem-only --yes --json
 ```
 
-The CLI verifies migration and a fresh hash-checked backup before disabling native memory/profile injection. Native files are preserved. Inspect the migration plan before applying it, and use `--hermes-home PATH` to target one profile explicitly.
+Native files are preserved. `check` is read-only and exits 1 until replacement readiness is satisfied. Use `--hermes-home PATH` to target one profile explicitly.
+
+To undo the last mode switch without deleting OptMem data:
 
 ```bash
 hermes optmem-hermes rollback --json
 ```
 
-Rollback restores the previous mode configuration; OptMem data stays intact.
+## Good to know
 
-## Upgrade an existing installation
+- Raw records are append-only. Summaries are **lossy**, but original details remain recoverable.
+- Later notes do not automatically supersede earlier ones: **no semantic conflict resolution**.
+- The wake digest is bounded but **consumes model context**.
+- `forget` removes summaries, not raw records.
+- Upgrading an older installation: change `memory.provider: optmem` to `optmem-hermes` only in the selected profile. Data paths stay unchanged; the CLI becomes `hermes optmem-hermes`.
 
-After installing this version, an older profile using `memory.provider: optmem` must select `optmem-hermes`. Preserve its existing mode flags and data paths; do not change other profiles. The Python package and data locations are unchanged. The top-level CLI command changes from `hermes optmem` to `hermes optmem-hermes`.
+## Optional LLM summaries
 
-## Full documentation
+Compaction is local and LLM-free by default. Opting into `llm_summary` lets the
+host LLM summarize pending decay blocks through the native auxiliary task
+`optmem_summary`: the host owns auth and routing, the plugin supplies no keys, and
+`provider: auto` / `model: ""` uses the host's configured model. Enabling it sends
+the pending block lines to the provider you select (network egress, tokens/cost);
+any failure falls back to the local extractor with the raw records retained. Set
+`llm_summary: true` in `<HERMES_HOME>/optmem/config.json` and route the task in
+`hermes model` or under `auxiliary.optmem_summary`. See
+[LLM summaries (opt-in)](../docs/reference.md#llm-summaries-opt-in).
 
-[Root README: configuration, tools, storage format, tests, profile isolation, rollback and limitations](../README.md).
+## More
+
+[Configuration, tools and technical reference](../docs/reference.md) · [Catalog submission checklist](../docs/catalog/README.md) · [MIT license](../LICENSE)
+
+The upstream animation is linked, not copied or rehosted. Upstream ships no LICENSE file; this repository's MIT license does not cover its media. No affiliation or endorsement is implied.

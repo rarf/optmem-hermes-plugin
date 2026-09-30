@@ -6,6 +6,7 @@ normalized BM25, decay compression, and the builtin-memory mirror hook.
 """
 
 import json
+import types
 
 import pytest
 
@@ -192,7 +193,82 @@ class TestOptMemProvider:
         assert "persiste" in reopened.wake_lines()[0]
 
 
+class TestOnMemoryWriteOriginGating:
+    """``on_memory_write`` must stay forward-compatible (``**kwargs``) without
+    weakening the provenance gates: the host's authoritative ``metadata`` wins,
+    extra host kwargs are a fallback, and the ``agent_context`` gate always
+    applies (a subagent/cron context never mirrors)."""
+
+    def test_extra_kwargs_do_not_break_a_primary_mirror(self, tmp_path):
+        p = _make_provider(tmp_path)
+        before = p._engine.log_len()
+        # A future host may pass provenance as keyword args, not only metadata.
+        p.on_memory_write(
+            "add", "memory", "fato com kwargs extras",
+            metadata={"execution_context": "foreground"},
+            session_id="s1", tool_name="memory", tool_call_id="c1",
+        )
+        assert p._engine.log_len() == before + 1
+
+    def test_non_primary_origin_in_kwargs_blocks_the_mirror(self, tmp_path):
+        p = _make_provider(tmp_path)
+        before = p._engine.log_len()
+        # No metadata, but the kwargs carry a non-primary origin: fail closed.
+        p.on_memory_write("add", "memory", "veio de um cron", execution_context="cron")
+        assert p._engine.log_len() == before
+
+    def test_metadata_origin_takes_precedence_over_kwargs(self, tmp_path):
+        p = _make_provider(tmp_path)
+        before = p._engine.log_len()
+        # The host's metadata is authoritative; a stray kwarg cannot override it.
+        p.on_memory_write(
+            "add", "memory", "metadata manda",
+            metadata={"execution_context": "foreground"}, execution_context="cron",
+        )
+        assert p._engine.log_len() == before + 1
+
+    def test_agent_context_gate_is_preserved(self, tmp_path):
+        p = OptMemProvider()
+        p.initialize("child", hermes_home=str(tmp_path), agent_context="subagent")
+        p._engine.init_store()
+        # Even authoritative foreground metadata cannot bypass the context gate.
+        p.on_memory_write(
+            "add", "memory", "child write",
+            metadata={"execution_context": "foreground"}, session_id="child",
+        )
+        assert p._engine.log_len() == 0
+
+    def test_non_dict_metadata_is_ignored_not_crashed(self, tmp_path):
+        p = _make_provider(tmp_path)
+        before = p._engine.log_len()
+        # Defensive: a non-mapping metadata must not raise (legacy/mistyped call).
+        p.on_memory_write("add", "memory", "metadata estranho", metadata="oops")  # type: ignore[arg-type]
+        assert p._engine.log_len() == before + 1
+
+    def test_background_review_origin_blocks_even_under_primary_context(self, tmp_path):
+        p = _make_provider(tmp_path)  # agent_context == "primary"
+        before = p._engine.log_len()
+        # A review fork runs under agent_context="primary" and is labelled only in
+        # the write metadata, so the origin check is the defence here.
+        p.on_memory_write(
+            "add", "memory", "revisao de fundo",
+            metadata={
+                "execution_context": "background_review",
+                "write_origin": "background_review",
+            },
+        )
+        assert p._engine.log_len() == before
+
+
 class TestOptMemProviderLifecycle:
+    def test_setup_schema_is_minimal_optional_and_secret_free(self):
+        """No mandatory config: the wizard can be skipped (returning [] is valid)."""
+        schema = OptMemProvider().get_config_schema()
+        assert [field["key"] for field in schema] == ["memory_dir"]
+        assert not any(field.get("required") for field in schema)
+        assert not any(field.get("secret") for field in schema)
+        assert all(field.get("default") for field in schema)
+
     def test_save_config_writes_declared_json_atomic(self, tmp_path):
         p = _make_provider(tmp_path)
         p.save_config({"memory_dir": "$HERMES_HOME/custom"}, str(tmp_path))
@@ -243,24 +319,27 @@ class TestOptMemProviderLifecycle:
         assert "aprov" in p._engine._tree_get(0, 2) or "deploy" in p._engine._tree_get(0, 2)
 
     def test_on_turn_start_prefers_llm_when_optin(self, tmp_path, monkeypatch):
+        """Opt-in via the SUPPORTED host facade (``PluginLlm.complete``)."""
         monkeypatch.setenv("OPTMEM_LLM_SUMMARY", "1")
-        p = _make_provider(tmp_path)
-        p.handle_tool_call("optmem_note", {"text": "facto duravel A"})
-        p.handle_tool_call("optmem_note", {"text": "facto duravel B"})
         captured = {}
 
-        class _Ctx:
-            @staticmethod
-            def llm(prompt, **kw):
-                captured["prompt"] = prompt
-                return "resumo llm de A e B"
+        class _Facade:
+            def complete(self, messages, **kw):
+                captured["messages"] = messages
+                captured["task"] = kw.get("task")
+                return types.SimpleNamespace(text="resumo llm de A e B", provider="p", model="m")
 
-        p._ctx = _Ctx()
+        mem_dir = tmp_path / "optmem_memory"
+        p = OptMemProvider(config={"memory_dir": str(mem_dir)}, llm_facade=_Facade())
+        p.initialize("test-session", hermes_home=str(tmp_path))
+        p.handle_tool_call("optmem_note", {"text": "facto duravel A"})
+        p.handle_tool_call("optmem_note", {"text": "facto duravel B"})
         p.on_turn_start(10, "trigger")
-        # Block compressed via LLM summary.
+        # Block compressed via the LLM summary; the task slot is the plugin-owned one.
         assert (0, 2) not in p._engine.pending_naps()
         assert "resumo llm" in p._engine._tree_get(0, 2)
-        assert "facto duravel" in captured.get("prompt", "")
+        assert captured["task"] == "optmem_summary"
+        assert "facto duravel" in captured["messages"][-1]["content"]
 
     def test_on_turn_start_skips_ephemeral_only_block(self, tmp_path):
         p = _make_provider(tmp_path)

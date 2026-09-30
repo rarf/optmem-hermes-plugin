@@ -525,7 +525,7 @@ def _memory_block_bounds(lines: list[str]) -> tuple[int, int] | None:
         if any(_MEMORY_INLINE_RE.match(line) for line in lines):
             raise ValueError(
                 "config.yaml uses inline flow style for the 'memory:' section "
-                "(e.g. 'memory: {provider: optmem}'); edit it manually and re-run"
+                "(e.g. 'memory: {provider: optmem-hermes}'); edit it manually and re-run"
             )
         return None
     depth = 1

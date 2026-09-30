@@ -123,9 +123,9 @@ class RecordingContext:
         return default
 
 
-def _load_manifest() -> dict:
-    """Parse the shipped ``plugin.yaml`` (host reader when present, else PyYAML)."""
-    text = (PLUGIN_PACKAGE / "plugin.yaml").read_text(encoding="utf-8-sig")
+def _load_yaml(path: Path) -> dict:
+    """Parse a shipped YAML file (host reader when present, else PyYAML)."""
+    text = path.read_text(encoding="utf-8-sig")
     try:
         import hermes_yaml as yaml  # noqa: PLC0415
     except Exception:
@@ -134,6 +134,11 @@ def _load_manifest() -> dict:
         except Exception:
             pytest.skip("no YAML reader available for the manifest")
     return yaml.safe_load(text)
+
+
+def _load_manifest() -> dict:
+    """Parse the shipped ``plugin.yaml``."""
+    return _load_yaml(PLUGIN_PACKAGE / "plugin.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +181,20 @@ class TestRegistration:
         after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
         assert after == before, "register()/discovery must not write to disk"
 
+    def test_provider_construction_is_write_free(self, tmp_path, monkeypatch):
+        """Constructing the provider (as discovery does) must not touch disk.
+
+        The host's own config loader scaffolds HERMES_HOME as a side effect, so
+        the provider reads legacy config with its own PyYAML reader and resolves
+        the real profile only in ``initialize()``.
+        """
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+        provider = OptMemProvider()
+        assert provider.name == CANONICAL_NAME
+        after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+        assert after == before, "provider construction must not write to disk"
+
 
 # ---------------------------------------------------------------------------
 # Naming: registered provider / manifest / entry point
@@ -209,20 +228,38 @@ class TestCanonicalNaming:
 
 
 class TestDeclaredCapabilities:
-    def test_declared_tools_match_the_provider_tool_schemas(self):
-        manifest = _load_manifest()
-        declared = set(manifest.get("provides_tools") or manifest.get("tools") or [])
-        actual = {schema["name"] for schema in OptMemProvider().get_tool_schemas()}
-        assert declared == EXPECTED_TOOLS
-        assert declared == actual
+    """Where a memory provider's surface is declared — and where it must not be.
 
-    def test_declared_hooks_are_real_provider_methods(self):
+    The manifest must NOT carry ``provides_tools``/``provides_hooks``: the host
+    diffs those against ``ctx.register_tool``/``ctx.register_hook``, and a memory
+    provider registers none of them (its surface is the ``MemoryProvider``
+    interface). Declaring them makes ``hermes plugins doctor`` hard-error on the
+    hook names (``on_memory_write``/``on_turn_start`` are not in ``VALID_HOOKS``)
+    and warn on every tool. Every bundled provider (honcho, mem0, holographic)
+    declares neither list.
+
+    The catalog entry (``docs/catalog/optmem-hermes.yaml``) is the discovery
+    surface and DOES list the interface tools/hooks, matching cognee and
+    entropicmem.
+    """
+
+    def test_manifest_declares_no_plugin_sdk_capabilities(self):
         manifest = _load_manifest()
-        declared = set(manifest.get("provides_hooks") or manifest.get("hooks") or [])
-        assert declared == EXPECTED_HOOKS
+        assert not (manifest.get("provides_tools") or manifest.get("tools"))
+        assert not (manifest.get("provides_hooks") or manifest.get("hooks"))
+
+    def test_provider_exposes_the_interface_surface(self):
         provider = OptMemProvider()
-        for hook in declared:
+        actual = {schema["name"] for schema in provider.get_tool_schemas()}
+        assert actual == EXPECTED_TOOLS
+        for hook in EXPECTED_HOOKS:
             assert callable(getattr(provider, hook, None)), f"{hook} is not a provider method"
+
+    def test_catalog_entry_capabilities_match_the_interface_surface(self):
+        entry = _load_yaml(PROJECT_ROOT / "docs" / "catalog" / "optmem-hermes.yaml")
+        capabilities = entry["capabilities"]
+        assert set(capabilities["provides_tools"]) == EXPECTED_TOOLS
+        assert set(capabilities["provides_hooks"]) == EXPECTED_HOOKS
 
     def test_manifest_does_not_carry_a_duplicate_legacy_hooks_key(self):
         """One declaration only (the catalog review diffs it against register())."""

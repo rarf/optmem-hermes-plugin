@@ -8,7 +8,8 @@ description: >-
   Independent Hermes integration of Victor Taelin's OptMem design: local,
   append-only memory with regex/BM25 recall and a bounded wake digest.
   Hybrid and guarded OptMem-only modes; verified migration and rollback.
-  No API keys or network calls by the memory engine. Summaries are lossy,
+  Local by default. Optional LLM summaries send memory blocks to the configured
+  provider via host-owned authentication and may incur token costs. Summaries are lossy,
   raw records remain recoverable, and conflicts are not resolved automatically.
   Wake consumes model context. See README for upstream attribution.
 maintainer: rarf
@@ -16,8 +17,9 @@ tier: community
 category: memory
 docs_url: https://github.com/rarf/optmem-hermes-plugin#readme
 version: "0.3.0"
-# Original upstream design animation, not a plugin screenshot; cross-repo immutable pin.
-image: https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif
+# User-selected static diagram. Replace the URL SHA alongside the final entry pin;
+# this draft URL will not resolve until the asset has been committed and pushed.
+image: https://raw.githubusercontent.com/rarf/optmem-hermes-plugin/2f647190e2f570458d9485edfbdfea574a76bcf7/docs/assets/catalog-banner-redesign.png
 screenshots: []
 readme: true
 platforms: [linux, windows]

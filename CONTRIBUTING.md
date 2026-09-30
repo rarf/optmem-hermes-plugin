@@ -52,10 +52,10 @@ pip install -e .[dev]
 python -m pytest tests/ -q
 
 # Test with Hermes (requires Hermes installed and gateway running)
-# 1. cp -r optmem ~/.hermes/plugins/optmem
+# 1. cp -r optmem ~/.hermes/plugins/optmem-hermes
 # 2. Add to ~/.hermes/config.yaml:
 #    memory:
-#      provider: optmem
+#      provider: optmem-hermes
 # 3. hermes gateway restart
 ```
 

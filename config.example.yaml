@@ -5,17 +5,17 @@
 #
 # The supported settings live in the declared config file
 # (<HERMES_HOME>/optmem/config.json), which the Desktop/dashboard memory-provider
-# panel and `hermes optmem` read and write. The keys below are the legacy
+# panel and `hermes optmem-hermes` read and write. The keys below are the legacy
 # config.yaml surface (honoured for backward compatibility, and only used for
 # keys the declared file does not set).
 
 # ... your existing providers (openai, anthropic, etc.) ...
 
 memory:
-  provider: optmem        # required: selects the OptMem memory provider
+  provider: optmem-hermes # required: selects the OptMem memory provider
 
   # --- Legacy 0.2.0 keys (optional) ---------------------------------------
-  # Prefer the declared config (dashboard panel / `hermes optmem`) over these.
+  # Prefer the declared config (dashboard panel / `hermes optmem-hermes`) over these.
   #
   # optmem:
   #   mode: hybrid            # hybrid (default) | optmem-only
@@ -24,8 +24,11 @@ memory:
   #                           # storage cap)
   #   recall_mode: auto       # auto | regex | bm25
   #   auto_nap: true          # drain pending compressions every ~10 turns
-  #   llm_summary: false      # RESERVED — no effect yet; compaction is always the
-  #                           # local, LLM-free extractive summarizer
+  #   llm_summary: false      # opt-in (default off): summarize decay blocks with
+  #                           # the host LLM through the native auxiliary task
+  #                           # `auxiliary.optmem_summary`; sends the pending block
+  #                           # lines to the selected provider. Off = the local,
+  #                           # LLM-free extractor. See docs/reference.md
   #   migration_split_long: false  # split native entries over 280 bytes on
   #                                # migration instead of stopping
   #   memory_dir: "${HERMES_HOME}/optmem_memory"   # default store location
@@ -33,6 +36,16 @@ memory:
   # 0.2.0 also accepted these two directly under `memory:`:
   # mode: hybrid
   # llm_summary: false
+  #
+  # Opt-in LLM summaries route through a plugin-registered native auxiliary task.
+  # Leave it at auto to use the host's configured model, or set an explicit
+  # provider/model/timeout here (or pick the `OptMem summaries` task in
+  # `hermes model`). The plugin supplies no keys — the host owns auth/routing.
+  # auxiliary:
+  #   optmem_summary:
+  #     provider: auto   # auto = the host's configured model
+  #     model: ""        # empty = auto; set an explicit provider/model if desired
+  #     timeout: 60
 
 # Optional: custom store location (default: $HERMES_HOME/optmem_memory)
 # memory_dir: "${HERMES_HOME}/optmem_memory"
