@@ -291,6 +291,7 @@ class TestBackup:
         manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["files"][0]["sha256"] == entry["sha256"]
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not describe Windows ACLs")
     def test_backup_dir_is_restrictive(self, tmp_path):
         mem_p, user_p = _write_native(tmp_path, memory=_cards("x"))
         report = backup_native_files(tmp_path, paths=(mem_p, user_p))

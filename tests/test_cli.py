@@ -108,6 +108,16 @@ class TestParserRegistration:
 
 
 class TestStatusAndShow:
+    def test_status_reports_same_readiness_as_check_after_migration(self, tmp_path, capsys):
+        _config_yaml(tmp_path)
+        _native(tmp_path, memory="A durable preference.")
+        code, _, _ = _run(["migrate", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code == 0
+        code, check, _ = _run(["check", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code == 0 and json.loads(check)["ready"] is True
+        code, status, _ = _run(["status", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code == 0 and json.loads(status)["ready"] is True
+
     def test_status_is_read_only(self, tmp_path, capsys):
         _config_yaml(tmp_path)
         code, out, _ = _run(["status", "--hermes-home", str(tmp_path), "--json"], capsys)

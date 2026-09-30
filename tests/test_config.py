@@ -146,13 +146,13 @@ class TestDeclaredConfig:
 class TestLegacyConfig:
     def test_legacy_plugins_section_still_honoured(self, tmp_path):
         cfg = resolve_config(tmp_path, plugin_config={"memory_dir": "/legacy/dir"})
-        assert cfg.memory_dir == "/legacy/dir"
+        assert cfg.memory_dir == str(Path("/legacy/dir"))
         assert cfg.source == "legacy"
 
     def test_declared_wins_over_legacy(self, tmp_path):
         _write_declared(tmp_path, {"memory_dir": "/declared"})
         cfg = resolve_config(tmp_path, plugin_config={"memory_dir": "/legacy"})
-        assert cfg.memory_dir == "/declared"
+        assert cfg.memory_dir == str(Path("/declared"))
 
     def test_legacy_llm_summary_and_mode(self, tmp_path):
         cfg = resolve_config(tmp_path, plugin_config={"llm_summary": True, "mode": "optmem-only"})

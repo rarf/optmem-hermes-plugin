@@ -289,7 +289,7 @@ def _status_payload(home: Path) -> dict[str, Any]:
     config = resolve_config(home)
     engine = _store_engine(config, create=False)
     mem_path, user_path = native_memory_paths(home)
-    verification = readiness(home, engine=engine)
+    verification = readiness(home, engine=engine, backup=_latest_backup(home))
     return {
         "mode": config.mode,
         "mode_source": config.source,
