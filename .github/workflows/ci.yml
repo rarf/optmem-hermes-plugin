@@ -34,6 +34,27 @@ jobs:
       - name: Verify engine compiles
         run: python -m py_compile optmem/engine.py optmem/__init__.py
 
+  host-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: NousResearch/hermes-agent
+          ref: f42f579cf8bac4918ac9599bece71618afadd846
+          path: hermes-host
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install real host and provider
+        run: |
+          python -m pip install -e ./hermes-host
+          python -m pip install -e '.[dev]'
+      - name: Exercise pinned host contracts
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hermes-host
+        run: python -m pytest tests/test_host_integration.py tests/test_temporal_chaining.py -q
+
   lint:
     runs-on: ubuntu-latest
     steps:

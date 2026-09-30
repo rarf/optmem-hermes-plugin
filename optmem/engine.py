@@ -140,6 +140,30 @@ def _tokenize(s: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", _normalize(s)) if t]
 
 
+# Regex metacharacters: their presence means the caller is speaking `memo`'s
+# language (a pattern), not prose.
+_REGEX_HINT_CHARS = frozenset(".*+?[](){}|^$\\")
+
+
+def is_natural_language(query: str) -> bool:
+    """True when *query* is prose rather than a `memo`-style regex/pattern.
+
+    A user sentence compiled as a regex stops matching anything useful (the
+    literal words plus punctuation must appear verbatim) and an unbalanced
+    bracket raises ``re.error``. Sentences are routed to token search instead,
+    while short literal queries ("paywall") and explicit patterns
+    ("AllDrivers.*paywall") keep the regex path.
+    """
+    text = (query or "").strip()
+    if not text:
+        return False
+    if text.endswith(("?", "!")):
+        return True
+    if any(ch in _REGEX_HINT_CHARS for ch in text):
+        return False
+    return len(text.split()) >= 3
+
+
 def _pad(text: str, rec: int) -> bytes:
     b = text.encode("utf-8")
     if len(b) > rec - 1:
@@ -471,22 +495,55 @@ class OptMemEngine:
             return True
         return self.log_len() != getattr(self, "_index_len", -1)
 
+    def plan_recall(self, query: str, mode: str = "auto") -> str:
+        """Resolve the concrete mode for *query*: "regex" | "bm25" | "token".
+
+        ``mode="auto"`` keeps regex for pattern-looking queries and routes prose
+        (``is_natural_language``) to token search — including an *invalid* pattern,
+        which falls back rather than failing a user sentence.
+
+        An EXPLICIT ``mode="regex"`` with an invalid pattern raises ``ValueError``:
+        the caller asked for `memo` parity and must be told the pattern is broken
+        instead of getting a bare ``re.error`` or an empty result.
+        """
+        requested = (mode or "auto").strip().lower()
+        if requested not in ("auto", "regex", "bm25", "token"):
+            raise ValueError(
+                f"unknown recall mode {mode!r}; allowed: auto, regex, bm25, token"
+            )
+        if requested == "auto":
+            requested = "token" if is_natural_language(query) else "regex"
+        if requested == "regex":
+            try:
+                re.compile(query, re.I)
+            except re.error as exc:
+                if mode and mode.strip().lower() == "regex":
+                    raise ValueError(f"invalid regex {query!r}: {exc}") from exc
+                return "token"
+        return requested
+
     def recall(self, query: str, topk: int = 5, mode: str = "regex",
                use_index: bool = True) -> list[tuple[float, int, str, str]]:
-        """Recall. Default mode "regex" matches the official OptMem `memo recall`
-        behavior exactly: case-insensitive regex over "#id date text", newest
-        matches first, capped by output size. "bm25" is an optional extra
-        (accent-normalized BM25) kept for fuzzy search; it does not change the
-        default behavior so the plugin stays byte- and behavior-compatible with
-        the original CLI on the same store.
+        """Recall, dispatch on the planned mode.
+
+        Default mode "regex" matches the official OptMem `memo recall` behavior
+        exactly: case-insensitive regex over "#id date text", newest matches
+        first, capped by output size. "bm25" is the optional accent-normalized
+        ranked search; "token" is natural-language retrieval (BM25 plus a literal
+        substring fallback so a rare token BM25 cannot rank is still found);
+        "auto" chooses per query and never compiles prose into a broken regex.
         """
         if not self.log_len():
             return []
-        if mode == "bm25":
+        resolved = self.plan_recall(query, mode)
+        if resolved == "token":
+            return self._recall_token(query, topk)
+        if resolved == "bm25":
             return self._recall_bm25(query, topk, use_index)
-        # mode == "regex" (default) — mirror memo cmd_recall exactly:
-        # case-insensitive regex over "#id date text"; keep the NEWEST matches
-        # that fit within PART_CHARS, returning newest-first.
+        return self._recall_regex(query, topk)
+
+    def _recall_regex(self, query: str, topk: int = 5) -> list[tuple[float, int, str, str]]:
+        """`memo recall` parity: case-insensitive regex, newest matches first."""
         pat = re.compile(query, re.I)
         part_chars = self.read_config().get("PART_CHARS", 20000)
         hits, out, size = 0, [], 0
@@ -501,6 +558,35 @@ class OptMemEngine:
                 old = out.pop(0)
                 size -= len(f"#{old[1]} {old[2]} {old[3]}".encode()) + 1
         out.reverse()  # newest-first, matching memo's "Newest N of M" output
+        return out[:topk] if topk else out
+
+    def _recall_token(self, query: str, topk: int = 5) -> list[tuple[float, int, str, str]]:
+        """Natural-language retrieval: BM25 ranking plus a literal fallback.
+
+        A question rarely repeats a memory verbatim, so BM25 ranks whatever
+        matches; a rare identifier BM25's tokenizer splits ("ZXQ-4481") is
+        recovered by a normalized substring scan. No pattern is compiled from the
+        user's text, so punctuation cannot break the search.
+        """
+        ranked = self._recall_bm25(query, topk=topk)
+        seen = {hit[1] for hit in ranked}
+        for hit in self._recall_substring(query, topk):
+            if hit[1] not in seen:
+                seen.add(hit[1])
+                ranked.append(hit)
+        return ranked[:topk] if topk else ranked
+
+    def _recall_substring(self, query: str, topk: int = 5) -> list[tuple[float, int, str, str]]:
+        """Normalized literal scan for the query's most distinctive tokens."""
+        tokens = sorted({t for t in _tokenize(query) if len(t) >= 3}, key=len, reverse=True)[:3]
+        if not tokens:
+            return []
+        pat = re.compile("|".join(re.escape(t) for t in tokens))
+        out = []
+        for mid, date, text, _tokens in self._all_records():
+            if pat.search(_normalize(f"#{mid} {date} {text}")):
+                out.append((1.0, mid, date, text))
+        out.reverse()  # newest first
         return out[:topk] if topk else out
 
     def _recall_bm25(self, query: str, topk: int = 5,
@@ -597,13 +683,15 @@ class OptMemEngine:
             self.write_config({})
         return fresh
 
-    def import_lines(self, lines: list[str]) -> int:
-        """Bulk-append historical 'YYYY-MM-DD <text>' memories (mirrors memo import).
-        Used once for bootstrapping an identity. Returns count appended.
+    def parse_import_lines(self, lines: list[str]) -> list[tuple[str, str]]:
+        """Validate ``YYYY-MM-DD <text>`` lines without writing (atomic import).
+
+        Raises ``ValueError`` naming the offending line. Kept separate so callers
+        can validate, de-duplicate and report before appending anything.
         """
         recs = self._all_records()
         last = recs[-1][1] if recs else "0000-00-00"
-        parsed = []  # validate everything first, then write (atomic-ish)
+        parsed: list[tuple[str, str]] = []
         for i, raw in enumerate(lines, 1):
             line = raw.rstrip("\n")
             if not line.strip():
@@ -625,6 +713,13 @@ class OptMemEngine:
                 raise ValueError(f"line {i}: {byte_len} bytes, limit {ENTRY_CHARS}.")
             parsed.append((date, text))
             last = date
+        return parsed
+
+    def import_lines(self, lines: list[str]) -> int:
+        """Bulk-append historical 'YYYY-MM-DD <text>' memories (mirrors memo import).
+        Used once for bootstrapping an identity. Returns count appended.
+        """
+        parsed = self.parse_import_lines(lines)  # validate everything first, then write
         for date, text in parsed:
             self._append_raw(date, text)
         return len(parsed)

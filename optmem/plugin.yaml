@@ -1,6 +1,6 @@
 name: optmem
-version: 0.2.0
-description: "OptMem — permanent append-only memory with decay compression and BM25 search. Portable reimplementation of Victor Taelin's OptMem (byte-compatible log), pluggable into Hermes as an external memory provider."
+version: 0.3.0
+description: "OptMem — permanent append-only memory with decay compression and BM25 search. Portable reimplementation of Victor Taelin's OptMem (byte-compatible log), installed as a Hermes external memory provider with Hybrid and OptMem-only modes."
 hooks:
   - on_memory_write
   - on_turn_start
