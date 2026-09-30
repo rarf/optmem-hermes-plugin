@@ -24,7 +24,8 @@ memory:
   #                           # storage cap)
   #   recall_mode: auto       # auto | regex | bm25
   #   auto_nap: true          # drain pending compressions every ~10 turns
-  #   llm_summary: false      # opt in to LLM-written compaction lines (token cost)
+  #   llm_summary: false      # RESERVED — no effect yet; compaction is always the
+  #                           # local, LLM-free extractive summarizer
   #   migration_split_long: false  # split native entries over 280 bytes on
   #                                # migration instead of stopping
   #   memory_dir: "${HERMES_HOME}/optmem_memory"   # default store location

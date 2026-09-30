@@ -34,6 +34,7 @@ from .config import (
 from .engine import OptMemEngine
 from .migrate import (
     MigrationPlan,
+    NativeReadError,
     apply_migration,
     apply_mode_switch,
     backup_native_files,
@@ -159,7 +160,12 @@ def optmem_command(args: argparse.Namespace) -> int:
                                dedupe=not bool(getattr(args, "no_dedupe", False)))
         if action == "rollback":
             return _cmd_rollback(home, as_json)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, NativeReadError) as exc:
+        # NativeReadError is a RuntimeError: a native MEMORY.md/USER.md that is not
+        # valid UTF-8 used to escape this handler as an uncaught traceback. It is a
+        # read failure with an actionable message, so report it like OSError/ValueError
+        # — while deliberately NOT catching RuntimeError broadly (that would mask real
+        # bugs in the commands).
         _emit({"ok": False, "error": str(exc)}, as_json, [f"error: {exc}"])
         return 1
     _emit({"ok": False, "error": f"unknown action {action!r}"}, as_json,
@@ -217,10 +223,65 @@ class _AbsentStore:
 # commands
 # --------------------------------------------------------------------------- #
 
-def _cmd_version(as_json: bool) -> int:
-    from . import __version__  # noqa: PLC0415  (importing the package is fine here)
+_DIST_NAME = "optmem-hermes-plugin"
+_PLUGIN_MANIFEST = Path(__file__).resolve().parent / "plugin.yaml"
 
-    _emit({"version": __version__}, as_json, [__version__])
+
+def _installed_version() -> str | None:
+    """Installed distribution version, or None when the distribution is absent.
+
+    ``importlib.metadata`` is stdlib; it does not import the provider package.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version(_DIST_NAME)
+    except PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _manifest_version() -> str | None:
+    """``version:`` from the ``plugin.yaml`` shipped beside this file, or None.
+
+    Plain-text parse (stdlib only): the manifest is a flat ``key: value`` file and
+    the CLI must not import PyYAML — or ``optmem/__init__.py``, which the host's
+    by-path load never executes — just to print a version.
+    """
+    try:
+        text = _PLUGIN_MANIFEST.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "version":
+            declared = value.strip().strip("'\"")
+            if declared:
+                return declared
+    return None
+
+
+def _plugin_version() -> str:
+    """Version of the plugin copy this file belongs to.
+
+    The host imports this module BY PATH under a synthetic package shell that
+    never executes ``optmem/__init__.py``, so ``from . import __version__`` raises
+    ImportError there. Read the installed distribution metadata and fall back to
+    the adjacent ``plugin.yaml``. When the two disagree the manifest wins: it
+    describes the copy actually loaded, whereas the distribution metadata can be
+    a stale editable install left over from an older release.
+    """
+    installed = _installed_version()
+    manifest = _manifest_version()
+    if installed and manifest and installed != manifest:
+        return manifest
+    return installed or manifest or "unknown"
+
+
+def _cmd_version(as_json: bool) -> int:
+    resolved = _plugin_version()
+    _emit({"version": resolved}, as_json, [resolved])
     return 0
 
 
@@ -303,23 +364,26 @@ def _cmd_check(home: Path, as_json: bool, *, split: bool) -> int:
 
 def _cmd_migrate(home: Path, as_json: bool, *, split: bool, dry_run: bool) -> int:
     config = resolve_config(home)
-    engine = _store_engine(config, create=not dry_run)
-    # A dry run must answer "what would be imported?" without creating anything.
-    # ``plan_migration`` only reads (the store's texts, its migration.json), so it
-    # is safe to plan against an absent store via the empty stand-in.
-    plan = _plan(home, engine=engine if engine is not None else _AbsentStore(), split=split)
+    # Plan BEFORE creating anything. ``plan_migration`` only reads the native
+    # files and the store, so an unreadable native file (NativeReadError) or a
+    # blocked plan must not leave a half-created store behind — the plan is built
+    # against the existing store, or an empty stand-in when none exists yet.
+    existing = _store_engine(config, create=False)
+    plan = _plan(home, engine=existing if existing is not None else _AbsentStore(), split=split)
     if dry_run:
         payload = {"ok": not plan.blocked, "plan": plan.as_dict(), "added": 0,
                    "skipped": len(plan.skipped), "backup": None,
-                   "store_exists": engine is not None}
+                   "store_exists": existing is not None}
         lines = [f"plan: {plan.status} — {len(plan.adds)} to add, "
                  f"{len(plan.skipped)} duplicate(s), {len(plan.unresolved)} unresolved"]
-        if engine is None:
+        if existing is None:
             lines.append("no OptMem store yet: a real run would create one")
         lines += [f"  - {reason}" for reason in plan.reasons]
         _emit(payload, as_json, lines)
         return 0 if not plan.blocked else 1
-    assert engine is not None  # create=not dry_run, and dry_run returned above
+
+    engine = existing if existing is not None else _store_engine(config, create=True)
+    assert engine is not None  # the only other option is a freshly created store
 
     mem_path, user_path = native_memory_paths(home)
     backup = backup_native_files(home, paths=(mem_path, user_path))

@@ -16,6 +16,7 @@ Contract pinned here:
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 from pathlib import Path
 
@@ -27,6 +28,16 @@ from optmem.engine import ENTRY_CHARS, OptMemEngine
 from optmem.migrate import DELIMITER
 
 TODAY_STR = __import__("datetime").date.today().isoformat()
+PLUGIN_MANIFEST = Path(__file__).resolve().parents[1] / "optmem" / "plugin.yaml"
+
+
+def _manifest_version() -> str:
+    """The version declared by the shipped plugin.yaml (stdlib parse)."""
+    for line in PLUGIN_MANIFEST.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "version":
+            return value.strip().strip("'\"")
+    raise AssertionError("plugin.yaml declares no version")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -312,3 +323,138 @@ class TestCheckAndImport:
         )
         assert code != 0
         assert "YYYY-MM-DD" in json.dumps(json.loads(out)) or "YYYY-MM-DD" in err
+
+
+class TestVersionCommand:
+    """The host loads cli.py BY PATH, so `version` must not import the package.
+
+    ``from . import __version__`` raises ImportError under the host's synthetic
+    package shell; the version is read from installed metadata with the shipped
+    plugin.yaml as the fallback.
+    """
+
+    def test_version_reports_the_manifest(self, capsys):
+        code, out, _ = _run(["version", "--json"], capsys)
+        assert code == 0
+        assert json.loads(out)["version"] == _manifest_version()
+
+    def test_version_human_output_is_the_bare_version(self, capsys):
+        code, out, _ = _run(["version"], capsys)
+        assert code == 0
+        assert out.strip() == _manifest_version()
+
+    def test_version_prefers_the_manifest_over_stale_installed_metadata(self, monkeypatch, capsys):
+        # A stale editable install (metadata from an older release) must not
+        # misreport the copy actually loaded.
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.0.0-stale")
+        code, out, _ = _run(["version", "--json"], capsys)
+        assert code == 0
+        assert json.loads(out)["version"] == _manifest_version()
+
+    def test_version_falls_back_to_the_manifest_when_not_installed(self, monkeypatch, capsys):
+        def _missing(name):
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        monkeypatch.setattr(importlib.metadata, "version", _missing)
+        code, out, _ = _run(["version", "--json"], capsys)
+        assert code == 0
+        assert json.loads(out)["version"] == _manifest_version()
+
+    def test_version_falls_back_to_metadata_without_a_manifest(self, monkeypatch, capsys):
+        from optmem import cli
+
+        monkeypatch.setattr(cli, "_manifest_version", lambda: None)
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "9.9.9")
+        code, out, _ = _run(["version", "--json"], capsys)
+        assert code == 0
+        assert json.loads(out)["version"] == "9.9.9"
+
+
+def _invalid_native(tmp_path) -> bytes:
+    """A MEMORY.md that is not valid UTF-8 (raises NativeReadError on read)."""
+    memories = tmp_path / "memories"
+    memories.mkdir(parents=True, exist_ok=True)
+    bad = b"valid fact\n\xff\xfe invalid utf8\n"
+    (memories / "MEMORY.md").write_bytes(bad)
+    return bad
+
+
+def _existing_store(tmp_path) -> None:
+    """Create the store so planning runs through the real engine, not the stand-in."""
+    OptMemEngine(str(tmp_path / "optmem_memory"))
+
+
+class TestUnreadableNative:
+    """An unreadable native file must fail cleanly, not escape as a traceback.
+
+    ``read_native_entries`` raises ``NativeReadError`` (a ``RuntimeError``), which
+    used to slip past the CLI's ``except (OSError, ValueError)`` for migrate, its
+    dry run and mode. Every path must emit a JSON error, exit non-zero, leave the
+    native file byte-for-byte unchanged and write nothing.
+    """
+
+    def test_migrate_invalid_utf8_reports_error_and_creates_nothing(self, tmp_path, capsys):
+        bad = _invalid_native(tmp_path)
+        _config_yaml(tmp_path)
+        code, out, _ = _run(["migrate", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code != 0
+        payload = json.loads(out)
+        assert payload["ok"] is False and "UTF-8" in payload["error"]
+        assert (tmp_path / "memories" / "MEMORY.md").read_bytes() == bad
+        assert not (tmp_path / "optmem_memory").exists()
+
+    def test_migrate_dry_run_invalid_utf8_reports_error(self, tmp_path, capsys):
+        bad = _invalid_native(tmp_path)
+        code, out, _ = _run(
+            ["migrate", "--dry-run", "--hermes-home", str(tmp_path), "--json"], capsys
+        )
+        assert code != 0
+        assert json.loads(out)["ok"] is False
+        assert (tmp_path / "memories" / "MEMORY.md").read_bytes() == bad
+
+    def test_check_invalid_utf8_reports_error_without_a_traceback(self, tmp_path, capsys):
+        bad = _invalid_native(tmp_path)
+        _existing_store(tmp_path)
+        code, out, _ = _run(["check", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code != 0
+        payload = json.loads(out)
+        assert payload["ok"] is False and "UTF-8" in payload["error"]
+        assert (tmp_path / "memories" / "MEMORY.md").read_bytes() == bad
+
+    def test_check_invalid_utf8_without_a_store_reports_not_ready(self, tmp_path, capsys):
+        # No store yet: readiness handles the read failure and reports it as a
+        # reason rather than an error payload.
+        bad = _invalid_native(tmp_path)
+        code, out, _ = _run(["check", "--hermes-home", str(tmp_path), "--json"], capsys)
+        assert code != 0
+        payload = json.loads(out)
+        assert payload["ready"] is False
+        assert any("UTF-8" in reason for reason in payload["reasons"])
+        assert (tmp_path / "memories" / "MEMORY.md").read_bytes() == bad
+
+    def test_mode_invalid_utf8_reports_error_and_writes_nothing(self, tmp_path, capsys):
+        bad = _invalid_native(tmp_path)
+        _config_yaml(tmp_path)
+        _existing_store(tmp_path)
+        before = (tmp_path / "config.yaml").read_bytes()
+        code, out, _ = _run(
+            ["mode", "optmem-only", "--yes", "--hermes-home", str(tmp_path), "--json"], capsys
+        )
+        assert code != 0
+        payload = json.loads(out)
+        assert payload["ok"] is False and "UTF-8" in payload["error"]
+        assert (tmp_path / "config.yaml").read_bytes() == before
+        assert (tmp_path / "memories" / "MEMORY.md").read_bytes() == bad
+        assert not declared_config_path(tmp_path).exists()
+
+    def test_unrelated_runtime_errors_are_not_masked(self, tmp_path, monkeypatch, capsys):
+        # Only NativeReadError is added to the handler's catch; a genuine bug
+        # (any other RuntimeError) must still propagate.
+        from optmem import cli
+
+        def _boom(home):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(cli, "resolve_config", _boom)
+        with pytest.raises(RuntimeError, match="boom"):
+            _run(["status", "--hermes-home", str(tmp_path), "--json"], capsys)

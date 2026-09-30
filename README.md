@@ -29,8 +29,10 @@ retrieve or compress.
   summaries of at most 280 bytes, so the context injected at session start stays
   bounded even as the log grows. The log file itself grows linearly with the
   number of memories — that is the price of never losing one.
-- **Compaction is lossy for detail.** Summaries live in `TREE/`; the raw
-  `LOG.txt` records survive and `optmem_zoom` walks back down to them.
+- **Compaction is lossy for detail.** A summary can omit facts that were in its
+  block — the raw `LOG.txt` records survive so the detail stays recoverable via
+  `optmem_zoom`, but the summary itself is not a lossless condensation, and the
+  raw records surviving does not mean the summary kept every fact.
 - **No semantic conflict resolution.** A later note does not invalidate an
   earlier one: "policy X was replaced by policy Y" is two records and the model
   must read both and judge which is current. There is no automatic supersession.
@@ -49,12 +51,22 @@ retrieve or compress.
 
 ## Install and activate
 
-```bash
-# pinned install
-pip install "optmem-hermes-plugin==0.3.0"
+> **0.3.0 is unreleased.** There is no `v0.3.0` tag and no PyPI artifact yet, so
+> `pip install "optmem-hermes-plugin==0.3.0"` and `git clone --branch v0.3.0`
+> fail. Install the reviewed source at an exact commit instead.
 
-# or from a checkout of the matching tag
-git clone --branch v0.3.0 https://github.com/rarf/optmem-hermes-plugin.git
+```bash
+# from an exact reviewed commit (replace with the full 40-character SHA)
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@<FULL-40-CHAR-COMMIT-SHA>"
+
+# ...or from a pinned source checkout
+git clone https://github.com/rarf/optmem-hermes-plugin.git
+cd optmem-hermes-plugin
+git checkout <FULL-40-CHAR-COMMIT-SHA>
+pip install .
+
+# latest published release (0.2.0), for the previous provider
+pip install "optmem-hermes-plugin==0.2.0"
 ```
 
 Activate it in the profile's `config.yaml` and restart:
@@ -134,6 +146,7 @@ memory-provider config panel. It exposes the same keys: `mode`, `memory_dir`,
 `wake_budget`, `recall_mode`, `auto_nap`, `llm_summary`,
 `migration_split_long`. Changing `mode` in the panel only records the intent —
 the switch itself is gated on migration, so it is applied by the CLI.
+`llm_summary` is reserved and has no effect yet (see Auto-compaction).
 
 **Precedence:** declared `config.json` → legacy `memory.optmem` /
 `plugins.optmem` keys in `config.yaml` → built-in defaults. An unknown mode
@@ -171,9 +184,15 @@ diagnostic.
 
 `on_turn_start` drains pending naps every ~10 turns with a deterministic,
 LLM-free extractive summarizer; a block with no durable signal is left raw
-rather than losing it. Set `llm_summary: true` (or `OPTMEM_LLM_SUMMARY=1`) to let
-the host LLM write the compacted line when one is available, falling back to the
-local extractor. `auto_nap: false` disables automatic compaction.
+rather than losing it. That extractor is lossy for detail — a summary can omit
+facts from its block, and the raw `LOG.txt` records surviving does **not** mean
+the summary kept them. `auto_nap: false` disables automatic compaction.
+
+`llm_summary` is **reserved and currently has no effect**: no automatic host-LLM
+summarization path is wired up, so compaction is always the local extractor. The
+setting is accepted (declared config, the legacy `config.yaml` key and
+`OPTMEM_LLM_SUMMARY=1`) so a future release can use it without a config change,
+but enabling it today changes nothing.
 
 ---
 

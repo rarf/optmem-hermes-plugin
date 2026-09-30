@@ -147,9 +147,11 @@ _NAP_INFO = (
     "durable signal is left raw rather than losing data."
 )
 _LLM_INFO = (
-    "Opt-in: let the host LLM write the compacted line instead of the deterministic "
-    "extractor. Costs tokens on every compaction cycle. Falls back to the local extractor "
-    "when no LLM is available."
+    "Reserved — not yet wired. Compaction always uses the deterministic, LLM-free "
+    "extractive summarizer; there is no automatic host-LLM path today, so this setting "
+    "currently has no effect. That extractor is lossy for detail: a summary can omit "
+    "facts from its block even though the raw LOG.txt records survive and optmem_zoom "
+    "walks back down to them."
 )
 _SPLIT_INFO = (
     "Off by default. When a native MEMORY.md/USER.md entry exceeds 280 UTF-8 bytes the "
@@ -222,7 +224,9 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             key="llm_summary",
             label="LLM summaries",
             kind=KIND_BOOL,
-            description="Opt in to LLM-written compaction lines (token cost per cycle).",
+            description=(
+                "Reserved; no effect yet — compaction is always the local LLM-free extractor."
+            ),
             info=_LLM_INFO,
             default="false",
             inline=True,

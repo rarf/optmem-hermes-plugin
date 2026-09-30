@@ -179,6 +179,15 @@ def _tool_names(provider) -> set[str]:
     return {schema["name"] for schema in provider.get_tool_schemas()}
 
 
+def _plugin_manifest_version() -> str:
+    """The version declared by the shipped plugin.yaml (stdlib parse)."""
+    for line in (PLUGIN_PACKAGE / "plugin.yaml").read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "version":
+            return value.strip().strip("'\"")
+    raise AssertionError("plugin.yaml declares no version")
+
+
 def _assert_real_optmem_provider(provider) -> None:
     """The host imports an out-of-tree provider under its synthetic namespace, so
     the class object is intentionally NOT the top-level ``optmem.OptMemProvider``;
@@ -313,6 +322,31 @@ class TestHostCliRegistration:
         assert payload["ok"] is False
         assert (isolated_home / "config.yaml").read_bytes() == before
         assert not declared_config_path(isolated_home).exists()
+
+    def test_version_via_host_registration_reports_the_loaded_copy(
+        self, installed, isolated_home, capsys
+    ):
+        command = self._command(isolated_home)
+        # The host imports cli.py BY PATH under a synthetic package shell that
+        # never executes optmem/__init__.py, so a package-relative
+        # `from . import __version__` would raise ImportError here.
+        assert command["handler_fn"].__module__.startswith("_hermes_user_memory.")
+        args = self._parse(command, ["version", "--json"])
+        assert command["handler_fn"](args) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["version"] == _plugin_manifest_version()
+
+    def test_version_via_host_registration_ignores_stale_metadata(
+        self, installed, isolated_home, capsys, monkeypatch
+    ):
+        command = self._command(isolated_home)
+        # A stale editable install must not misreport the by-path copy the host
+        # actually loaded.
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.0.0-stale")
+        args = self._parse(command, ["version", "--json"])
+        assert command["handler_fn"](args) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["version"] == _plugin_manifest_version()
 
 
 # ---------------------------------------------------------------------------

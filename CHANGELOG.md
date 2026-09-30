@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<HERMES_HOME>/optmem/config.json`) — mode, memory_dir, wake_budget,
   recall_mode, auto_nap, llm_summary, migration_split_long, rendered by Hermes'
   generic memory-provider panel. Precedence: declared → legacy `config.yaml`
-  keys → defaults.
+  keys → defaults. (`llm_summary` is reserved — see Fixed.)
 - **Migration tooling** (`optmem/migrate.py`) — byte-for-byte native backups
   with a sha256 manifest, an idempotent import that never drops a fact, safe
   splitting of over-long entries (`--split`), and a blocked plan that exits
@@ -35,7 +35,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context tokens, `forget` drops summaries only, and there is no semantic
   conflict resolution. The built-in/Honcho comparison no longer asserts
   unverified internals of other products. SECURITY.md and `config.example.yaml`
-  updated (supported version, dependencies, real keys and defaults).
+  updated (supported version, dependencies, real keys and defaults). 0.3.0 is
+  **unreleased**: the README no longer points at a non-existent `v0.3.0` tag or
+  `optmem-hermes-plugin==0.3.0` artifact, and instead pins an exact source commit.
+
+### Fixed
+- **`hermes optmem version` under the host's by-path load.** The host imports
+  `optmem/cli.py` by path under a synthetic package shell that never executes
+  `optmem/__init__.py`, so `from . import __version__` raised ImportError and the
+  command crashed. It now reads the installed distribution metadata
+  (`importlib.metadata`) and falls back to the shipped `plugin.yaml` (stdlib
+  parse, no provider import); a stale editable install no longer misreports the
+  copy actually loaded.
+- **Unreadable native memory files no longer escape the CLI as a traceback.** A
+  `MEMORY.md`/`USER.md` that is not valid UTF-8 raises `NativeReadError` (a
+  `RuntimeError`); `migrate` (including `--dry-run`), `check` and `mode` now
+  emit a JSON error and exit non-zero, leaving the native file byte-for-byte
+  unchanged and creating no store. Only `NativeReadError` was added to the
+  handler's catch, so other exceptions still surface.
+- **Corrected the inert `llm_summary` claim.** 0.2.0 documented `llm_summary`
+  (and `OPTMEM_LLM_SUMMARY=1`) as letting the host LLM write the compacted line;
+  no such path was ever wired, and compaction has always used the local,
+  LLM-free extractive summarizer. The setting is now documented as reserved and
+  without effect. That extractor is lossy for detail: a summary can omit facts,
+  and the raw records surviving does not mean the summary kept every fact.
 
 ## [0.2.0] - 2026-08-09
 
