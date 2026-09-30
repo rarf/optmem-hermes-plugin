@@ -303,6 +303,7 @@ class OptMemProvider(MemoryProvider):
         self._engine: OptMemEngine | None = None
         self._memory_dir: str | None = None
         self._session_id: str = ""
+        self._agent_context: str = "primary"
         self._woke_key: str | None = None
 
     @property
@@ -337,6 +338,7 @@ class OptMemProvider(MemoryProvider):
         # else fall back to the global helper (or env/default in CI).
         home = str(kwargs.get("hermes_home") or _get_hermes_home())
         self._hermes_home = home
+        self._agent_context = str(kwargs.get("agent_context") or "primary")
         legacy = (
             dict(self._plugin_config)
             if self._plugin_config is not None
@@ -492,7 +494,12 @@ class OptMemProvider(MemoryProvider):
         auto-split; if it exceeds 280 bytes engine.append raises and the
         agent is expected to store smaller, atomic facts (matches memo).
         """
-        if action != "add" or self._engine is None or not content:
+        if (
+            action != "add"
+            or self._engine is None
+            or not content
+            or self._agent_context != "primary"
+        ):
             return
         ctx = metadata or {}
         origin = str(ctx.get("execution_context") or ctx.get("write_origin") or "")
@@ -506,6 +513,8 @@ class OptMemProvider(MemoryProvider):
     # -- tools --------------------------------------------------------------
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
+        if self._agent_context != "primary":
+            return []
         return [
             NOTE_SCHEMA,
             RECALL_SCHEMA,
@@ -519,6 +528,8 @@ class OptMemProvider(MemoryProvider):
         ]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
+        if self._agent_context != "primary":
+            return tool_error("OptMem tools are restricted to the primary agent")
         if tool_name == "optmem_note":
             return self._handle_note(args)
         if tool_name == "optmem_recall":
@@ -730,7 +741,7 @@ class OptMemProvider(MemoryProvider):
         more fluent summary. Runs every ~10 turns to bound cost. Never touches
         the prompt cache (writes to disk only) and never crashes the turn.
         """
-        if self._engine is None or not self._config.auto_nap:
+        if self._engine is None or not self._config.auto_nap or self._agent_context != "primary":
             return
         if turn_number % 10 != 0:
             return
@@ -822,11 +833,12 @@ def _local_summary(lines: list[str]) -> str:
         "fix",
         "bug",
         "feature",
-        "obra",
-        "casa",
-        "telhad",
-        "casamarcia",
-        "casal",
+        "approved",
+        "decision",
+        "replaced",
+        "supersed",
+        "preference",
+        "policy",
     )
     scored: list[tuple[int, str]] = []
     for ln in lines:
@@ -837,39 +849,23 @@ def _local_summary(lines: list[str]) -> str:
             score += 2
         scored.append((score, ln.strip()))
 
-    # Sort by durability, keep highest-first.
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    # If nothing looks durable, refuse to summarize (caller keeps the block raw
-    # rather than lose potentially-relevant ephemeral context).
+    # Extraction remains lossy and cannot resolve semantic contradictions.
+    # Reserve room for the newest line so an older high-scoring approval does
+    # not crowd out a later correction. Prefer newer entries on score ties.
     if not any(score > 0 for score, _ in scored):
         return ""
-
-    # Greedily build the summary within the byte budget.
-    parts: list[str] = []
-    total = 0
-    for score, ln in scored:
-        if score == 0 and parts:
-            # Ephemeral-only line: skip (unless we have nothing else yet).
+    latest = scored[-1][1].encode("utf-8")[:ENTRY_CHARS].decode("utf-8", "ignore").rstrip()
+    parts = [latest] if latest else []
+    total = len(latest.encode("utf-8"))
+    ranked = sorted(enumerate(scored[:-1]), key=lambda item: (item[1][0], item[0]), reverse=True)
+    for _, (score, line) in ranked:
+        if score <= 0 or not line or line in parts:
             continue
-        b = len(ln.encode("utf-8"))
-        if total + (len(parts) > 0) + b > ENTRY_CHARS:
-            # Try to fit a truncated fragment of this line.
-            if not parts:
-                allowed = ENTRY_CHARS - 1
-                if b > allowed:
-                    ln = ln.encode("utf-8")[:allowed].decode("utf-8", "ignore").rstrip()
-                    if ln:
-                        parts.append(ln)
-            break
-        parts.append(ln)
-        total += b
-        if total >= ENTRY_CHARS - 20:  # leave a small margin
-            break
-    summary = " | ".join(parts)
-    if len(summary.encode("utf-8")) > ENTRY_CHARS:
-        summary = summary.encode("utf-8")[:ENTRY_CHARS].decode("utf-8", "ignore").rstrip()
-    return summary
+        cost = len(line.encode("utf-8")) + (3 if parts else 0)
+        if total + cost <= ENTRY_CHARS:
+            parts.append(line)
+            total += cost
+    return " | ".join(parts)
 
 
 def _use_llm_summary() -> bool:

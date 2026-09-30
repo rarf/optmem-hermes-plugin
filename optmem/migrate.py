@@ -458,6 +458,46 @@ def backup_native_files(
     return {"dir": str(backup_dir), "files": files, "created": manifest["created"]}
 
 
+def verify_backup(backup: Mapping[str, Any] | None, hermes_home: Path) -> tuple[bool, list[str]]:
+    """Require an intact backup of the current canonical native sources."""
+    if not backup or not backup.get("dir"):
+        return False, ["no native backup has been taken; take a fresh backup first"]
+    directory = Path(str(backup["dir"]))
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), list):
+            raise ValueError("invalid backup manifest")
+        if Path(str(manifest.get("hermes_home", ""))).resolve() != hermes_home.resolve():
+            raise ValueError("backup belongs to a different profile")
+        records = manifest["files"]
+        expected = native_memory_paths(hermes_home)
+        if len(records) != len(expected) or not all(isinstance(r, dict) for r in records):
+            raise ValueError("backup manifest must cover both canonical native sources")
+        by_source = {Path(str(r.get("path", ""))).resolve(): r for r in records}
+        if len(by_source) != len(expected):
+            raise ValueError("duplicate backup source records")
+        for source in expected:
+            record = by_source.get(source.resolve())
+            if record is None or not isinstance(record.get("present"), bool):
+                raise ValueError("backup does not cover the current native sources")
+            if not record["present"]:
+                if source.exists():
+                    raise ValueError("backup predates native source changes; take a fresh backup")
+                continue
+            copy = directory / source.name
+            if Path(str(record.get("backup", ""))).resolve() != copy.resolve():
+                raise ValueError("backup copy is outside the declared backup directory")
+            data = copy.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != record.get("sha256") or len(data) != record.get("bytes"):
+                raise ValueError("backup copy hash or size does not match its manifest")
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                raise ValueError("backup predates native source changes; take a fresh backup")
+    except (OSError, ValueError, TypeError) as exc:
+        return False, [f"native backup verification failed: {exc}"]
+    return True, []
+
+
 def restore_native_files(backup: Mapping[str, Any], *, overwrite: bool = False) -> list[str]:
     """Put a backup's files back where they came from (rollback path)."""
     restored: list[str] = []
@@ -622,9 +662,8 @@ def readiness(
     if unresolved:
         reasons.extend(plan.reasons if plan is not None else ())
 
-    backup_ok = bool(backup and backup.get("dir") and Path(str(backup["dir"])).is_dir())
-    if not backup_ok:
-        reasons.append("no native backup has been taken; run the migration with a backup first")
+    backup_ok, backup_reasons = verify_backup(backup, home)
+    reasons.extend(backup_reasons)
 
     imported = not native_absent and not unresolved and store_entries > 0
     if store_entries == 0 and not native_absent:

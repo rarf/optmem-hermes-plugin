@@ -22,6 +22,70 @@ def ready_home(home):
     return engine, migrate.backup_native_files(home)
 
 
+@pytest.mark.parametrize("damage", ["empty", "manifest", "stale", "tampered"])
+def test_readiness_requires_complete_fresh_hash_verified_backup(tmp_path, damage):
+    engine, backup = ready_home(tmp_path)
+    directory = tmp_path / "optmem_backups" / "not-a-backup"
+    if damage == "empty":
+        directory.mkdir()
+        backup = {"dir": str(directory)}
+    elif damage == "manifest":
+        directory.mkdir()
+        (directory / "manifest.json").write_text('{"files": []}')
+        backup = {"dir": str(directory)}
+    elif damage == "stale":
+        source = tmp_path / "memories" / "MEMORY.md"
+        source.write_text("Updated durable preference.")
+        engine.append("Updated durable preference.")
+    else:
+        from pathlib import Path
+
+        Path(backup["files"][0]["backup"]).write_text("Corrupted backup.")
+    report = migrate.readiness(tmp_path, engine=engine, backup=backup)
+    assert report["ready"] is False
+    assert report["checks"]["backup"] is False
+    before = (tmp_path / "config.yaml").read_bytes()
+    assert not migrate.apply_mode_switch(tmp_path, "optmem-only", engine=engine, backup=backup)[
+        "ok"
+    ]
+    assert (tmp_path / "config.yaml").read_bytes() == before
+
+
+@pytest.mark.parametrize("context", ["subagent", "cron", "background_review"])
+def test_non_primary_context_cannot_mirror_native_writes(tmp_path, context):
+    provider = OptMemProvider()
+    provider.initialize("child-session", hermes_home=str(tmp_path), agent_context=context)
+    provider._engine.init_store()
+    provider.on_memory_write("add", "memory", "A fact produced by a child.")
+    assert provider._engine.log_len() == 0
+
+
+def test_non_primary_context_has_no_memory_tools_or_compaction_writes(tmp_path):
+    provider = OptMemProvider()
+    provider.initialize("child", hermes_home=str(tmp_path), agent_context="subagent")
+    provider._engine.init_store()
+    provider._engine.append("2026-01-01 Approved durable decision alpha.")
+    provider._engine.append("2026-01-02 Approved durable decision beta.")
+    pending = provider._engine.next_nap()
+    assert pending
+    assert provider.get_tool_schemas() == []
+    result = json.loads(provider.handle_tool_call("optmem_note", {"text": "Child wrote this."}))
+    assert "primary agent" in result["error"]
+    provider.on_turn_start(10, "child turn")
+    assert provider._engine.log_len() == 2
+    assert provider._engine.next_nap() == pending
+
+
+def test_lossy_local_summary_keeps_latest_line_even_with_low_keyword_score():
+    from optmem import _local_summary
+
+    earlier = "2026-01-01 Budget approved: " + "alpha " * 38
+    latest = "2026-02-01 X was replaced by Y; X no longer applies."
+    summary = _local_summary([earlier, latest])
+    assert latest in summary
+    assert len(summary.encode("utf-8")) <= 280
+
+
 def test_declared_write_refuses_corrupt_existing_config(tmp_path):
     path = tmp_path / "optmem" / "config.json"
     path.parent.mkdir()
