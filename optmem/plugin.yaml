@@ -1,6 +1,27 @@
-name: optmem
-version: 0.2.0
-description: "OptMem — permanent append-only memory with decay compression and BM25 search. Portable reimplementation of Victor Taelin's OptMem (byte-compatible log), pluggable into Hermes as an external memory provider."
-hooks:
+name: optmem-hermes
+version: 0.3.0
+description: "OptMem — permanent append-only memory with decay compression and BM25 search. Portable reimplementation of Victor Taelin's OptMem (byte-compatible log), installed as a Hermes external memory provider with Hybrid and OptMem-only modes."
+# Canonical name is `optmem-hermes`, not the bare upstream key: this is an
+# independent Hermes integration of Victor Taelin's OptMem design, and the
+# Hermes plugin catalog reserves the bare upstream name for the affiliated
+# project (plugin-catalog/README.md, "Names"). The Python package, the on-disk
+# store keep their names; the CLI becomes `hermes optmem-hermes`.
+#
+# One capability declaration only. `hermes plugins validate` diffs these lists
+# against what register() actually wires, so keep them exact: the provider
+# exposes these nine tools through `get_tool_schemas()` and these two lifecycle
+# hooks through the MemoryProvider interface (called by the host's
+# MemoryManager), not through ctx.register_tool / ctx.register_hook.
+provides_tools:
+  - optmem_note
+  - optmem_recall
+  - optmem_nap
+  - optmem_wake
+  - optmem_zoom
+  - optmem_forget
+  - optmem_config
+  - optmem_import
+  - optmem_init
+provides_hooks:
   - on_memory_write
   - on_turn_start

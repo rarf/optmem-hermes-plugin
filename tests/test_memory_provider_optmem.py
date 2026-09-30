@@ -38,8 +38,8 @@ class TestOptMemEngine:
 
     def test_bm25_accent_normalization(self, tmp_path):
         eng = OptMemEngine(str(tmp_path))
-        eng.append("a caçula chegou cedo")          # id 0
-        eng.append("o cachorro late de noite")      # id 1
+        eng.append("a caçula chegou cedo")  # id 0
+        eng.append("o cachorro late de noite")  # id 1
         eng.append("comprei cacau para a receita")  # id 2
         # BM25 is opt-in via mode="bm25" (accent-normalized).
         hits = eng.recall("cacula", topk=3, mode="bm25")
@@ -125,9 +125,7 @@ class TestOptMemProvider:
     def test_note_and_recall_roundtrip(self, tmp_path):
         p = _make_provider(tmp_path)
         out = json.loads(
-            p.handle_tool_call(
-                "optmem_note", {"text": "deploy em staging autorizado"}
-            )
+            p.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})
         )
         assert out["status"] == "added"
         res = json.loads(p.handle_tool_call("optmem_recall", {"query": "staging"}))
@@ -159,9 +157,7 @@ class TestOptMemProvider:
         p.handle_tool_call("optmem_note", {"text": "y"})
         # The old prompt/schema led callers to send #0-1 as hi=1.
         res = json.loads(
-            p.handle_tool_call(
-                "optmem_nap", {"lo": 0, "hi": 1, "summary": "xy resumido"}
-            )
+            p.handle_tool_call("optmem_nap", {"lo": 0, "hi": 1, "summary": "xy resumido"})
         )
         assert res["status"] == "compressed"
         assert res["block"] == "0-1"
@@ -197,15 +193,14 @@ class TestOptMemProvider:
 
 
 class TestOptMemProviderLifecycle:
-    def test_save_config_writes_yaml_atomic(self, tmp_path):
-        from pathlib import Path
+    def test_save_config_writes_declared_json_atomic(self, tmp_path):
         p = _make_provider(tmp_path)
-        p.save_config({"memory_dir": "/tmp/x"}, str(tmp_path))
-        cfg = Path(tmp_path / "config.yaml")
+        p.save_config({"memory_dir": "$HERMES_HOME/custom"}, str(tmp_path))
+        cfg = tmp_path / "optmem" / "config.json"
         assert cfg.exists()
-        import yaml
-        data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
-        assert data["plugins"]["optmem"] == {"memory_dir": "/tmp/x"}
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        assert data == {"memory_dir": "$HERMES_HOME/custom"}
+        assert not (tmp_path / "config.yaml").exists()
 
     def test_init_store_is_idempotent(self, tmp_path):
         # Fresh provider (not yet initialized) → first init reports fresh=True.
