@@ -1,123 +1,144 @@
-# OptMem — Permanent Local Memory for Hermes Agent
+# OptMem — permanent local memory for Hermes Agent
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue.svg)](pyproject.toml)
 [![Hermes](https://img.shields.io/badge/Hermes%20Agent-memory%20provider-8A2BE2.svg)](https://github.com/NousResearch/hermes-agent)
-[![Parity](https://img.shields.io/badge/byte--compatible%20with%20memo%20CLI-✅-green.svg)](https://github.com/VictorTaelin/OptMem)
 [![CI](https://github.com/rarf/optmem-hermes-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/rarf/optmem-hermes-plugin/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/tag/rarf/optmem-hermes-plugin?label=version)](https://github.com/rarf/optmem-hermes-plugin/releases)
 
-**Permanent, searchable agent memory that never leaves your machine, costs zero
-tokens to recall, and is byte-for-byte compatible with Victor Taelin's
-`OptMem` `memo` CLI.**
+**Append-only, local, LLM-free memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent).**
+OptMem is a `MemoryProvider` that keeps durable facts in a fixed-width log on
+your disk, compresses old context with a binary decay tree, and searches it
+locally with regex or BM25. No network, no API key, no LLM call to store,
+retrieve or compress.
 
-OptMem is a drop-in `MemoryProvider` for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-that gives your agent a durable, decaying memory store — the same design
-Taelin ships as a CLI, but wired directly into Hermes. No cloud, no API key, no
-per-turn LLM cost. Just memory that survives restarts and stays small.
-
-> **License note.** The upstream `VictorTaelin/OptMem` repo currently ships
-> **without an explicit license** (all rights reserved by default). This
-> repository is an *independent* reimplementation of the published design and
-> memory format — it does not copy the upstream source. It is released here
-> under MIT (see [LICENSE](LICENSE)). If/once upstream adopts a license, this
-> plugin will align with it.
+> **Upstream.** The memory model and on-disk format come from Victor Taelin's
+> [`OptMem`](https://github.com/VictorTaelin/OptMem) (`memo`). This repository
+> is an independent reimplementation of that published design — it does not copy
+> upstream source. Check upstream for its current license terms; this repo is
+> MIT (see [LICENSE](LICENSE)).
 
 ---
 
-## OptMem vs Hermes built-in vs Honcho (cloud)
+## What OptMem does — and what it does not claim
 
-Three ways to give Hermes memory. Here is how they compare on the things that
-actually matter in production.
-
-| Dimension | Hermes built-in (`memory`) | Honcho (cloud) | **OptMem (local)** |
-|---|---|---|---|
-| Setup | Zero — `memory_enabled: true` | API key + base URL + network | **Zero** — `memory.provider: optmem` |
-| Storage | JSONL, one file per session | Cloud DB (vendor-hosted) | Append-only `LOG.txt` + binary decay `TREE/` |
-| Entry size limit | None — paragraphs allowed | None | **≤280 bytes** per atomic fact |
-| Deletion | Edited/deleted freely | Via API (vendor-controlled) | **Never deleted** — forgotten = rebuilt |
-| Growth | Unbounded (log grows forever) | Scales in cloud (costs rise) | **Self-compressing** via decay tree ("nap") |
-| Recall | Recent-first + optional semantic | Semantic + LLM-ranking | Regex (default, = `memo`) or accent BM25 |
-| Recall latency | Local (recent) / embeddings | Network round-trip, often an LLM call | **Local, sub-ms** |
-| Per-call cost | Free recent; embeddings if semantic | **Reasoning-tier LLM every call** | **0 tokens** — local search |
-| Cross-session | Per-session files, needs aggregation | Global user model | **One identity**, whole history searchable |
-| Data residency | On disk in `HERMES_HOME` | **Leaves the machine to a 3rd party** | On disk in `HERMES_HOME` |
-| Offline / private | Yes | No (needs network) | **Yes** |
-| Portability | Hermes-only format | Honcho-only | **Byte-compatible** with `memo` CLI |
-| Code footprint | Core (no extra install) | 1500+ LOC + SDK + threads | ~850 LOC, stdlib only |
-
-**How to choose:**
-
-- **Built-in** — zero setup, free-form notes, semantic search over recent
-  context. Good for short-lived assistants and quick experiments.
-- **Honcho (cloud)** — cross-session *user modeling* and rich semantics, but
-  needs a key, network, and pays an LLM call on recall.
-- **OptMem** — the *durable, always-on default*: a permanent single identity
-  that survives restarts without growing unbounded, costs **zero tokens** to
-  recall, stays on your disk, and is portable to the `memo` CLI. Great for
-  long-running personal agents that need to "remember forever" cheaply.
-
-> OptMem trades *free-form editing* and *cloud user-modeling* for *permanent,
-> compressed, portable, token-free* memory. If you need both, run them side by
-> side: built-in for scratch notes, Honcho for modeling, OptMem for the durable
-> identity.
+- **Append-only log.** `LOG.txt` holds one fixed 320-byte record per memory.
+  Records are never rewritten or deleted.
+- **The log grows; the injected context does not.** Every `optmem_note` adds one
+  record. The decay tree ("nap, don't sleep") merges blocks of records into
+  summaries of at most 280 bytes, so the context injected at session start stays
+  bounded even as the log grows. The log file itself grows linearly with the
+  number of memories — that is the price of never losing one.
+- **Compaction is lossy for detail.** Summaries live in `TREE/`; the raw
+  `LOG.txt` records survive and `optmem_zoom` walks back down to them.
+- **No semantic conflict resolution.** A later note does not invalidate an
+  earlier one: "policy X was replaced by policy Y" is two records and the model
+  must read both and judge which is current. There is no automatic supersession.
+- **`forget` drops summaries, not raw memories.** It truncates the decay-tree
+  entries for a block (and larger blocks built on it); `LOG.txt` is untouched
+  and the next nap rebuilds a summary.
+- **Zero LLM/API tokens by default.** Storing, retrieving and compressing are
+  local and LLM-free. The one place context is spent is the *wake* digest: on the
+  first turn of each session the provider injects the decayed context into the
+  prompt (`wake_budget`, default 96 lines). That is a reading budget, not a
+  storage cap, and it does consume model context tokens.
+- **Local-only.** No network calls, no credentials. The store lives in your
+  `HERMES_HOME`.
 
 ---
 
-## What you get
-
-- **🔒 Permanent & private** — append-only `LOG.txt` on your disk. Nothing is
-  ever deleted; forgotten summaries are rebuilt, never lost.
-- **🌳 Self-compressing** — the decay tree ("nap, don't sleep") keeps context
-  dense instead of growing unbounded. One line per atomic fact, ≤280 bytes.
-- **🔎 Two search modes** — `recall` defaults to the **same regex behavior as
-  the `memo` CLI** (case-insensitive, newest-first), with optional
-  accent-normalized **BM25 ranking** (`cacula` finds `caçula`).
-- **💾 Byte-compatible with `memo`** — same fixed-width 320/288-byte records and
-  `.lock` file. Run the CLI and the plugin on the **same store**; they read and
-  write each other's memories safely.
-- **🪟 Native Windows** — `msvcrt` advisory locks with spin/backoff (no WSL, no
-  `Resource deadlock avoided`). `fcntl` on Unix.
-- **🧩 Zero-dependency** — pure Python standard library.
-
-## Quick start
+## Install and activate
 
 ```bash
-# 1. Install
-git clone https://github.com/rarf/optmem-hermes-plugin.git
-cp -r optmem-hermes-plugin/optmem ~/.hermes/plugins/optmem
-# (or: pip install optmem-hermes-plugin)
+# pinned install
+pip install "optmem-hermes-plugin==0.3.0"
 
-# 2. Activate in ~/.hermes/config.yaml
+# or from a checkout of the matching tag
+git clone --branch v0.3.0 https://github.com/rarf/optmem-hermes-plugin.git
+```
+
+Activate it in the profile's `config.yaml` and restart:
+
+```yaml
 memory:
   provider: optmem
+```
 
-# 3. Restart the gateway
+```bash
 hermes gateway restart
 ```
 
-That's it. The agent now has permanent memory — no migration, no prompt paste.
+### Profile plugin copies
 
-### Windows profiles
+Hermes profiles keep independent plugin copies. If you install by copying the
+package instead of `pip`, update **every** copy after upgrading (the global
+`$HERMES_HOME/plugins/optmem/` and each `$HERMES_HOME/profiles/<profile>/plugins/optmem/`),
+then restart long-running Hermes/Desktop/gateway processes — Python keeps
+already-imported modules in memory.
 
-Hermes profiles keep independent plugin copies. Updating the repository does
-not automatically update already-installed profile copies. After pulling a new
-plugin version on Windows, sync both Python modules into every profile that
-uses OptMem:
+### Rollback
 
-```bash
-HERMES_HOME="${HERMES_HOME:-$HOME/AppData/Local/hermes}"
-for profile in default alldrivers-dev alldrivers-devops alldrivers-planner \
-               alldrivers-qa alldrivers-seo casa coach; do
-  target="$HERMES_HOME/profiles/$profile/plugins/optmem"
-  mkdir -p "$target"
-  cp optmem/__init__.py optmem/engine.py "$target/"
-done
-```
+- `hermes optmem rollback` restores the `config.yaml` saved before the last mode
+  switch, byte-for-byte, and the previous declared mode. OptMem data is untouched.
+- The raw native files are copied before any migration or mode change into
+  `<HERMES_HOME>/optmem_backups/native-<stamp>/` with a sha256 manifest.
+- To roll back the *code*, reinstall the previous pinned version
+  (`pip install "optmem-hermes-plugin==0.2.0"`) and re-sync any copied plugin
+  directories.
 
-Also update the global copy at `$HERMES_HOME/plugins/optmem/` when the default
-installation uses it. Restart long-running Hermes/Desktop/gateway processes
-after syncing; Python keeps already-imported plugin modules in memory.
+---
+
+## Modes
+
+- **hybrid** (default) — OptMem runs alongside the built-in `MEMORY.md`/`USER.md`
+  store. Nothing about the built-in store changes.
+- **optmem-only** — the built-in store is switched off
+  (`memory.memory_enabled: false` and `memory.user_profile_enabled: false`) so
+  only OptMem is active. The switch is gated: `hermes optmem mode optmem-only
+  --yes` applies it only when the migration is verified (every native entry
+  present in the store) and a native backup exists. Without `--yes` the command
+  refuses and writes nothing.
+
+`hermes optmem mode hybrid --yes` re-enables the built-in store; OptMem data is
+kept.
+
+---
+
+## Configuring
+
+Two supported surfaces expose the same keys.
+
+### `hermes optmem <action>`
+
+Scriptable, with `--json` for machine output and `--hermes-home PATH` to target
+one profile explicitly.
+
+| Action | What it does |
+|---|---|
+| `status` | Mode, store path, entry count, pending compressions, native-store flags, readiness |
+| `show` | Effective configuration and where each value came from (declared / legacy / defaults) |
+| `check` | Is the store ready to replace the native one? Read-only; exit code 1 when not ready |
+| `migrate` | Back up `MEMORY.md`/`USER.md` and import them. Idempotent. `--dry-run` plans only, `--split` splits over-long entries on safe boundaries |
+| `mode` | Switch `hybrid` / `optmem-only` (`--yes` required to write) |
+| `import` | Import a curated `YYYY-MM-DD <text>` file (dedupes by default; `--no-dedupe` to append) |
+| `rollback` | Undo the last mode switch |
+| `version` | Installed plugin version |
+
+`status`, `show` and `check` never create or modify anything.
+
+### Desktop / dashboard panel
+
+The declared schema (`optmem/config_schema.py`, stored as
+`<HERMES_HOME>/optmem/config.json`) is rendered by Hermes' generic
+memory-provider config panel. It exposes the same keys: `mode`, `memory_dir`,
+`wake_budget`, `recall_mode`, `auto_nap`, `llm_summary`,
+`migration_split_long`. Changing `mode` in the panel only records the intent —
+the switch itself is gated on migration, so it is applied by the CLI.
+
+**Precedence:** declared `config.json` → legacy `memory.optmem` /
+`plugins.optmem` keys in `config.yaml` → built-in defaults. An unknown mode
+resolves to `hybrid` (the built-in store keeps working) and is reported as a
+diagnostic.
 
 ---
 
@@ -126,123 +147,89 @@ after syncing; Python keeps already-imported plugin modules in memory.
 | Tool | Purpose |
 |---|---|
 | `optmem_note` | Record one durable memory line (≤280 bytes). |
-| `optmem_recall` | Search all history — regex by default (matches `memo recall`), or `mode="bm25"` for ranked/accent-tolerant search. |
-| `optmem_wake` | Print the current decayed context (permanent memory). |
+| `optmem_recall` | Search all history — `auto` by default (regex for pattern-like queries, token/BM25 for prose); `regex` forces `memo` parity, `bm25` is ranked, accent-tolerant search. |
+| `optmem_wake` | Print the current decayed context. |
 | `optmem_nap` | Apply a compression the engine requested. |
-| `optmem_zoom` | Navigate the decay tree (halve a block to see its parts). |
-| `optmem_forget` | Drop a bad summary so the next nap rebuilds it. |
-| `optmem_config` | Show or change size knobs (mirrors `memo config`). |
-| `optmem_import` | Bulk-load historical `YYYY-MM-DD <text>` memories (bootstrap). |
-| `optmem_init` | Create the store deliberately (mirrors `memo init`). |
+| `optmem_zoom` | Walk the decay tree back down to raw records. |
+| `optmem_forget` | Drop a summary so the next nap rebuilds it (raw records stay). |
+| `optmem_config` | Show or change size knobs. |
+| `optmem_import` | Bulk-load historical `YYYY-MM-DD <text>` memories. |
+| `optmem_init` | Create the store deliberately. |
 
-All nine mirror the `memo` CLI surface — so scripts and habits transfer 1:1.
+### Recall modes
 
----
+- **auto** (the default `recall_mode`, and the default for `optmem_recall`) —
+  regex for pattern-like queries, token/BM25 for natural-language sentences; an
+  invalid pattern is never compiled blindly.
+- **regex** (the engine API default, and `memo` parity) — case-insensitive regex
+  over `#id date text`, newest matches first.
+- **bm25** — accent-normalized ranked search (`cacula` finds `caçula`).
+- **token** — BM25 plus a literal substring fallback so a rare identifier BM25
+  cannot rank is still found.
 
-## Parity with upstream `memo`
+### Auto-compaction
 
-The memory model is identical: append-only log, binary decay tree, "nap, don't
-sleep" compression, fixed-width record format. Logs are interchangeable on disk.
-
-| Aspect | `VictorTaelin/OptMem` (`memo`) | `optmem-hermes-plugin` |
-|---|---|---|
-| On-disk format | `LOG_REC=320`, `TREE_REC=288`, `RAW_MAX=16` | **Identical** |
-| `recall` | regex only | regex by default (**same behavior**); BM25 opt-in |
-| `wake` | printed once per session | surfaced once per session via `prefetch` (Option B) |
-| Platform locks | `fcntl` only (Unix) | `msvcrt` on Windows, `fcntl` on Unix |
-| Coexist on one machine | — | **Yes** — shared store + shared `.lock` (proven by retro-test) |
-| Form factor | CLI you paste into `AGENTS.md` | Hermes `MemoryProvider` — auto-wired, no paste |
-
-In short: **same durable store, full CLI parity, plus native Windows and
-first-class Hermes integration.**
+`on_turn_start` drains pending naps every ~10 turns with a deterministic,
+LLM-free extractive summarizer; a block with no durable signal is left raw
+rather than losing it. Set `llm_summary: true` (or `OPTMEM_LLM_SUMMARY=1`) to let
+the host LLM write the compacted line when one is available, falling back to the
+local extractor. `auto_nap: false` disables automatic compaction.
 
 ---
 
-## How it works
+## Format compatibility with upstream `memo`
 
-- **Append-only log** (`LOG.txt`, fixed-width 320-byte records).
-- **Decay tree** (`TREE/<size>`). When a pair of memories forms, a *nap* merges
-  the block into one line — old context compresses instead of growing.
-- **Search** — regex (default, matches `memo`) or accent-normalized BM25.
-- **Auto-compaction** — `on_turn_start` drains pending naps every ~10 turns
-  with a **deterministic, LLM-free** extractive summary (no gateway, no API,
-  works in CI/standalone). Opt into fluent LLM summaries with
-  `llm_summary: true` or `OPTMEM_LLM_SUMMARY=1`.
-- **Portable lock** — `msvcrt` on Windows (`LK_NBLCK` + spin/backoff), `fcntl`
-  on Unix. Descriptors are closed on release (no fd leak).
-
-Related upstream fix (Windows `fcntl` → `msvcrt`):
-[VictorTaelin/OptMem#2](https://github.com/VictorTaelin/OptMem/pull/2).
+The on-disk constants mirror the published upstream format: `LOG_REC = 320`,
+`TREE_REC = 288`, `RAW_MAX = 16`, one entry of at most 280 UTF-8 bytes, and
+native entries joined by `"\n§\n"`. `scripts/sync_upstream.sh` fetches upstream's
+`memo`, compares those constants, and exits non-zero when they drift — that
+script is the compatibility check. This repository's test suite does not run the
+upstream CLI.
 
 ---
 
 ## Examples
 
-A self-contained demo runs the full memory lifecycle **without Hermes**
-(temp store, no network, zero tokens):
-
 ```bash
 python examples/standalone_demo.py
 ```
 
-It shows: `note` → `recall` (regex + accent-tolerant BM25) → auto-compaction
-(deterministic, LLM-free) → `wake` (decayed context). Equivalent to what the
-agent gets automatically via the `on_turn_start` hook.
+Runs the full lifecycle without Hermes (temp store, no network): `note` →
+`recall` (regex + accent-tolerant BM25) → auto-compaction (deterministic,
+LLM-free) → `wake`.
 
 ---
 
-## Tests
+## Tests and CI
 
 ```bash
-pip install pytest
+pip install -e .[dev]
 pytest tests/
 ```
 
-26 end-to-end tests run against the **real** engine and provider (temp
-`HERMES_HOME`, no mocks): append, regex + BM25 recall, accent normalization,
-nap/decay compression, byte-compat reopen, tool roundtrip, prefetch (wake-once
-per session), `on_memory_write` mirror, `on_turn_start` auto-compaction
-(local + LLM opt-in + ephemeral-skip), and config/import/init.
+The suite runs against the real engine and provider (temp `HERMES_HOME`, no
+mocks): append, regex/BM25/token recall, accent normalization, nap/decay
+compression, byte-compat reopen, tool roundtrip, wake-once-per-session,
+`on_memory_write`, `on_turn_start` auto-compaction, the config resolver and
+declared schema, migration/backup/mode switching, and the `hermes optmem` CLI.
+CI runs it on Linux (Python 3.11/3.12) and Windows (3.11), and lints with ruff.
 
-A bidirectional retro-compatibility harness also proves the plugin and the
-official `memo` CLI read/write the **same store** safely.
+---
 
-### Auto-compaction (no tokens required)
+## How this differs from other memory backends
 
-OptMem never grows unbounded: the decay tree compresses old blocks into one
-line each ("nap, don't sleep"). `on_turn_start` runs this automatically every
-~10 turns so context stays dense without you invoking `optmem_nap`.
+Rather than assert internals of other products, here are OptMem's own
+trade-offs:
 
-The summary is produced by a **deterministic, LLM-free** extractor
-(`_local_summary`):
-
-- Scores each line by durability keywords (dates, names, decisions, approvals,
-  budgets, churn, KRs, etc.) and a leading `YYYY-MM-DD` date.
-- Greedily packs the highest-scoring lines into **≤280 bytes** joined by ` | `.
-- Returns `""` when a block has **no** durable signal — the block is then left
-  raw rather than losing potentially-relevant ephemeral context.
-
-This means compaction works **everywhere** — CI, standalone scripts, offline —
-with **zero token cost**. If you want a more fluent summary, opt in:
-
-```yaml
-memory:
-  provider: optmem
-  llm_summary: true   # or export OPTMEM_LLM_SUMMARY=1
-```
-
-When enabled and a host LLM is available, it writes the single summary line;
-otherwise the local extractor is used as a fallback.
-
-### Staying aligned with upstream
-
-`./scripts/sync_upstream.sh` fetches Taelin's `memo`, checks that its on-disk
-constants still match this engine's, and re-runs the suite. It does **not**
-auto-merge — it alerts you when upstream drifts so you can adapt deliberately.
-
-```bash
-./scripts/sync_upstream.sh
-```
+- The **built-in Hermes store** (`MEMORY.md`/`USER.md`) is free-form and part of
+  Hermes core; OptMem is opt-in, append-only, limited to one atomic fact per
+  line, and separately searchable. Hybrid mode runs both at once.
+- **Cloud / LLM-backed memory providers** (for example Honcho) require their own
+  configuration and credentials, and may send data off the machine; OptMem needs
+  neither and never leaves the disk. See each provider's own documentation for
+  its behaviour and costs.
+- OptMem trades free-form editing and automatic conflict resolution for a
+  permanent, append-only, locally searchable store.
 
 ---
 
@@ -250,8 +237,8 @@ auto-merge — it alerts you when upstream drifts so you can adapt deliberately.
 
 - Memory model and on-disk format by **Victor Taelin** —
   [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem).
-- Standalone Hermes integration, Windows locking, BM25 search, and CLI parity
-  by the project contributors.
+- Standalone Hermes integration, Windows locking, BM25/token search, the
+  migration/mode tooling and CLI parity by the project contributors.
 
 ## License
 

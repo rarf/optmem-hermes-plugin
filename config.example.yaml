@@ -1,23 +1,40 @@
-# Example Hermes config.yaml for OptMem memory provider
+# Example Hermes config.yaml for the OptMem memory provider.
 #
-# Copy this to ~/.hermes/config.yaml (or your profile's config.yaml)
-# and restart the gateway: `hermes gateway restart`
+# Copy the relevant lines into ~/.hermes/config.yaml (or the target profile's
+# config.yaml) and restart the gateway: `hermes gateway restart`.
+#
+# The supported settings live in the declared config file
+# (<HERMES_HOME>/optmem/config.json), which the Desktop/dashboard memory-provider
+# panel and `hermes optmem` read and write. The keys below are the legacy
+# config.yaml surface (honoured for backward compatibility, and only used for
+# keys the declared file does not set).
 
 # ... your existing providers (openai, anthropic, etc.) ...
 
 memory:
-  provider: optmem
-  enabled: true
+  provider: optmem        # required: selects the OptMem memory provider
 
-  # --- Optional OptMem-specific settings ---
-  # Auto-compaction: the plugin compresses old memory blocks every ~10 turns.
-  # Default: deterministic, LLM-free summary (zero token cost, works offline).
-  # Set llm_summary: true to let the host LLM write a more fluent summary
-  # when available (token cost per nap cycle). Equivalent to env OPTMEM_LLM_SUMMARY=1.
-  # llm_summary: true
+  # --- Legacy 0.2.0 keys (optional) ---------------------------------------
+  # Prefer the declared config (dashboard panel / `hermes optmem`) over these.
+  #
+  # optmem:
+  #   mode: hybrid            # hybrid (default) | optmem-only
+  #   wake_budget: 96         # lines of decayed context injected on the first
+  #                           # turn of each session (a reading budget, not a
+  #                           # storage cap)
+  #   recall_mode: auto       # auto | regex | bm25
+  #   auto_nap: true          # drain pending compressions every ~10 turns
+  #   llm_summary: false      # opt in to LLM-written compaction lines (token cost)
+  #   migration_split_long: false  # split native entries over 280 bytes on
+  #                                # migration instead of stopping
+  #   memory_dir: "${HERMES_HOME}/optmem_memory"   # default store location
+  #
+  # 0.2.0 also accepted these two directly under `memory:`:
+  # mode: hybrid
+  # llm_summary: false
 
-# Optional: custom store location (default: $HERMES_HOME/memory/optmem)
-# memory_dir: "${HERMES_HOME}/memory/optmem"
+# Optional: custom store location (default: $HERMES_HOME/optmem_memory)
+# memory_dir: "${HERMES_HOME}/optmem_memory"
 
 toolsets:
   - hermes-cli

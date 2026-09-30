@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.3.x   | :white_check_mark: |
+| 0.2.x   | :x:                |
 
 Only the latest minor release receives security updates. Please upgrade to the latest version.
 
@@ -24,12 +25,18 @@ We will acknowledge receipt within 48 hours and provide a timeline for a fix.
 
 ## Security Considerations for Users
 
-This plugin is a **local-only memory store** — it makes no network calls and has no external dependencies beyond Python stdlib + PyYAML (which is already a Hermes dependency).
+This plugin is a **local-only memory store** — it makes no network calls and
+needs no runtime dependency beyond the Python standard library. PyYAML is
+imported lazily and only for the legacy `memory.optmem` / `plugins.optmem`
+config fallback and for writing `config.yaml`; the supported declared-config
+path (`<HERMES_HOME>/optmem/config.json`) is plain JSON.
 
 ### What this means for security:
 - **No data leaves your machine** — the store (`LOG.txt` + `TREE/`) lives entirely in your `HERMES_HOME` (default: `~/.hermes/optmem_memory/`)
 - **No API keys, no credentials** — the provider requires zero configuration beyond `memory.provider: optmem`
 - **File permissions** — the store inherits standard filesystem permissions. Restrict `HERMES_HOME` if you share the machine.
+- **Validated, atomic config writes** — the declared `config.json` is validated before anything is opened, written to a temp file and `os.replace`d (mode `0600`); `config.yaml` edits are surgical (comments and unrelated keys preserved) and the pre-switch file is copied aside first. `hermes optmem mode` refuses to write without `--yes`.
+- **Raw backups** — the native `MEMORY.md`/`USER.md` are copied byte-for-byte with a sha256 manifest into `<HERMES_HOME>/optmem_backups/` (mode `0700`) before any migration or mode change.
 - **Lock file** — a `.lock` file coordinates concurrent access (advisory locking via `msvcrt` on Windows, `fcntl` on Unix). It does not provide cryptographic security.
 
 ### Threat model
@@ -42,6 +49,8 @@ If you need stronger guarantees (encryption, tamper-evidence, multi-tenant isola
 
 ## Dependency Security
 
-Only dependency: `pyyaml` (transitive via Hermes). We pin `pyyaml>=6.0` in optional dev deps. Hermes itself manages its dependencies.
+No required runtime dependency: the engine, provider, config resolver and CLI
+are standard library only. The optional `legacy-config` extra pins `pyyaml>=6.0`
+for the legacy `config.yaml` surface (Hermes itself ships PyYAML).
 
 Run `pip-audit` or `pip install pip-audit && pip-audit` periodically if you install in a standalone environment.

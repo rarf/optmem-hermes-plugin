@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - unreleased
+
+### Added
+- **`hermes optmem` CLI** (`optmem/cli.py`) — `status`, `show`, `check`,
+  `migrate`, `mode`, `import`, `rollback`, `version`, with `--json` and
+  `--hermes-home PATH`. Read-only commands create and modify nothing.
+- **Hybrid / OptMem-only modes** — `hermes optmem mode optmem-only --yes` turns
+  off the built-in `MEMORY.md`/`USER.md` store only after a verified migration
+  (every native entry present in the store) and a native backup. Without `--yes`
+  the command refuses and writes nothing. `rollback` restores the previous
+  `config.yaml` byte-for-byte and keeps OptMem data.
+- **Declared config + GUI panel** (`optmem/config_schema.py`, stored at
+  `<HERMES_HOME>/optmem/config.json`) — mode, memory_dir, wake_budget,
+  recall_mode, auto_nap, llm_summary, migration_split_long, rendered by Hermes'
+  generic memory-provider panel. Precedence: declared → legacy `config.yaml`
+  keys → defaults.
+- **Migration tooling** (`optmem/migrate.py`) — byte-for-byte native backups
+  with a sha256 manifest, an idempotent import that never drops a fact, safe
+  splitting of over-long entries (`--split`), and a blocked plan that exits
+  non-zero and leaves the native store running.
+
+### Changed
+- **Retrieval**: `recall_mode` adds `auto` (regex for pattern-like queries,
+  token/BM25 for prose) on top of `regex` (`memo` parity) and `bm25`.
+- **Docs**: README rewritten to state only verifiable behaviour — the log grows
+  one fixed-width record per memory (the *injected context* is what stays
+  bounded), retrieval/compression are LLM-free while the wake digest does spend
+  context tokens, `forget` drops summaries only, and there is no semantic
+  conflict resolution. The built-in/Honcho comparison no longer asserts
+  unverified internals of other products. SECURITY.md and `config.example.yaml`
+  updated (supported version, dependencies, real keys and defaults).
+
 ## [0.2.0] - 2026-08-09
 
 ### Added
