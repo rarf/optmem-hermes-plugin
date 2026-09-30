@@ -12,11 +12,14 @@ your disk, compresses old context with a binary decay tree, and searches it
 locally with regex or BM25. No network, no API key, no LLM call to store,
 retrieve or compress.
 
-> **Upstream.** The memory model and on-disk format come from Victor Taelin's
-> [`OptMem`](https://github.com/VictorTaelin/OptMem) (`memo`). This repository
-> is an independent reimplementation of that published design — it does not copy
-> upstream source. Check upstream for its current license terms; this repo is
-> MIT (see [LICENSE](LICENSE)).
+> **An independent Hermes integration — not Victor Taelin's project.** The
+> memory model and on-disk format come from Victor Taelin's upstream
+> [`OptMem`](https://github.com/VictorTaelin/OptMem) (`memo`). *This* repository
+> is an independent reimplementation of that published design as a Hermes
+> memory provider — it does not copy upstream source and is not affiliated with
+> or endorsed by upstream. Upstream ships no `LICENSE` file, so check upstream
+> for its current terms before reusing its code or media; this repo is MIT (see
+> [LICENSE](LICENSE)).
 
 ---
 
@@ -39,21 +42,30 @@ retrieve or compress.
 - **`forget` drops summaries, not raw memories.** It truncates the decay-tree
   entries for a block (and larger blocks built on it); `LOG.txt` is untouched
   and the next nap rebuilds a summary.
-- **Zero LLM/API tokens by default.** Storing, retrieving and compressing are
-  local and LLM-free. The one place context is spent is the *wake* digest: on the
-  first turn of each session the provider injects the decayed context into the
-  prompt (`wake_budget`, default 96 lines). That is a reading budget, not a
-  storage cap, and it does consume model context tokens.
+- **No LLM or API tokens to store, retrieve or compress — but the wake digest
+  does spend model context.** Storing, retrieving and compressing are local and
+  LLM-free. The one place context is spent is the *wake* digest: on the first
+  turn of each session the provider injects the decayed context into the prompt
+  (`wake_budget`, default 96 lines). That is a reading budget, not a storage
+  cap, and it consumes model context tokens — "bounded" means the injected
+  context stays roughly constant as the log grows, not that it is free.
 - **Local-only.** No network calls, no credentials. The store lives in your
   `HERMES_HOME`.
 
 ---
 
-## Install and activate
+## Quickstart
+
+### 1. Install (from a pinned source commit)
 
 > **0.3.0 is unreleased.** There is no `v0.3.0` tag and no PyPI artifact yet, so
 > `pip install "optmem-hermes-plugin==0.3.0"` and `git clone --branch v0.3.0`
 > fail. Install the reviewed source at an exact commit instead.
+>
+> **Not in the Hermes plugin catalog.** OptMem has no entry in the Hermes plugin
+> catalog yet, so `hermes plugins install optmem` is not a working install path
+> today. The catalog is a reviewed, SHA-pinned listing; until this plugin has an
+> entry, use the pinned-source install below.
 
 ```bash
 # from an exact reviewed commit (replace with the full 40-character SHA)
@@ -69,34 +81,91 @@ pip install .
 pip install "optmem-hermes-plugin==0.2.0"
 ```
 
-Activate it in the profile's `config.yaml` and restart:
+### 2. Activate it
+
+Set the provider in the profile's `config.yaml` and restart:
 
 ```yaml
 memory:
-  provider: optmem
+  provider: optmem-hermes
 ```
 
 ```bash
 hermes gateway restart
 ```
 
+### Upgrading an older profile
+
+The canonical provider name is now `optmem-hermes`, distinct from the upstream
+project. For a profile previously configured with `memory.provider: optmem`,
+change only that key to `optmem-hermes` after installing this version, preserve
+its existing data paths and native-memory flags, and restart that profile.
+The Python package and OptMem data paths remain unchanged. The top-level CLI
+command changes from `hermes optmem` to `hermes optmem-hermes`.
+Do not apply this change to other profiles automatically.
+
+### 3. Verify before you switch (read-only)
+
+These commands create and modify nothing — run them first:
+
+```bash
+hermes optmem-hermes status          # mode, store path, entry count, pending naps, readiness
+hermes optmem-hermes show            # effective config and where each value came from
+hermes optmem-hermes check           # is the store ready to replace the native one? (exit 1 if not)
+```
+
+`status` starts in **hybrid** mode, where the built-in `MEMORY.md`/`USER.md`
+store keeps working unchanged. Switching to **optmem-only** is gated on a
+verified migration — see [Modes](#modes).
+
 ### Profile plugin copies
 
-Hermes profiles keep independent plugin copies. If you install by copying the
-package instead of `pip`, update **every** copy after upgrading (the global
-`$HERMES_HOME/plugins/optmem/` and each `$HERMES_HOME/profiles/<profile>/plugins/optmem/`),
-then restart long-running Hermes/Desktop/gateway processes — Python keeps
-already-imported modules in memory.
+Hermes profiles keep independent plugin copies, so a copied (non-`pip`) install
+must be updated in **only the profile(s) you explicitly select** — never as a
+blanket update of every profile on the machine. Target one profile explicitly:
+
+```bash
+hermes optmem-hermes status --hermes-home "$HERMES_HOME/profiles/<profile>"
+```
+
+then update the copy under that profile's `plugins/optmem-hermes/` and restart that
+profile's long-running Hermes/Desktop/gateway process — Python keeps
+already-imported modules in memory. Other profiles are left untouched.
 
 ### Rollback
 
-- `hermes optmem rollback` restores the `config.yaml` saved before the last mode
+- `hermes optmem-hermes rollback` restores the `config.yaml` saved before the last mode
   switch, byte-for-byte, and the previous declared mode. OptMem data is untouched.
 - The raw native files are copied before any migration or mode change into
   `<HERMES_HOME>/optmem_backups/native-<stamp>/` with a sha256 manifest.
 - To roll back the *code*, reinstall the previous pinned version
-  (`pip install "optmem-hermes-plugin==0.2.0"`) and re-sync any copied plugin
-  directories.
+  (`pip install "optmem-hermes-plugin==0.2.0"`) and re-sync only the copied
+  plugin directory for the profile you are targeting.
+
+---
+
+## See the original design, in motion
+
+The animation below is **Victor Taelin's original** `OptMem` explainer. It walks
+through the upstream `memo` design: an append-only log that never deletes a
+memory, on-the-spot "nap, don't sleep" compression into a binary merge tree, and
+a memory context that stays constant-sized while details fade with age into
+higher-level summaries that can be zoomed back down. It explains the **upstream
+design that this plugin reimplements — not this Hermes plugin itself.**
+
+It is linked from upstream by its raw URL, **pinned to a verified upstream
+commit**, with attribution — it is **not copied or rehosted** in this repository:
+
+![Victor Taelin's original OptMem design animation](https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif)
+
+Source: [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem) —
+[`anim/optmem.gif`](https://github.com/VictorTaelin/OptMem/blob/main/anim/optmem.gif)
+at upstream commit
+[`1fb164cf`](https://github.com/VictorTaelin/OptMem/commit/1fb164cf39028047781f72ac3bb1e5a691c1dcb0).
+Upstream ships no `LICENSE` file — check upstream for its current terms before
+reusing its media.
+
+For how *this* Hermes integration behaves, see the sections below.
 
 ---
 
@@ -106,12 +175,12 @@ already-imported modules in memory.
   store. Nothing about the built-in store changes.
 - **optmem-only** — the built-in store is switched off
   (`memory.memory_enabled: false` and `memory.user_profile_enabled: false`) so
-  only OptMem is active. The switch is gated: `hermes optmem mode optmem-only
+  only OptMem is active. The switch is gated: `hermes optmem-hermes mode optmem-only
   --yes` applies it only when the migration is verified (every native entry
   present in the store) and a native backup exists. Without `--yes` the command
   refuses and writes nothing.
 
-`hermes optmem mode hybrid --yes` re-enables the built-in store; OptMem data is
+`hermes optmem-hermes mode hybrid --yes` re-enables the built-in store; OptMem data is
 kept.
 
 ---
@@ -120,7 +189,7 @@ kept.
 
 Two supported surfaces expose the same keys.
 
-### `hermes optmem <action>`
+### `hermes optmem-hermes <action>`
 
 Scriptable, with `--json` for machine output and `--hermes-home PATH` to target
 one profile explicitly.
@@ -230,7 +299,7 @@ The suite runs against the real engine and provider (temp `HERMES_HOME`, no
 mocks): append, regex/BM25/token recall, accent normalization, nap/decay
 compression, byte-compat reopen, tool roundtrip, wake-once-per-session,
 `on_memory_write`, `on_turn_start` auto-compaction, the config resolver and
-declared schema, migration/backup/mode switching, and the `hermes optmem` CLI.
+declared schema, migration/backup/mode switching, and the `hermes optmem-hermes` CLI.
 CI runs it on Linux (Python 3.11/3.12) and Windows (3.11), and lints with ruff.
 
 ---
@@ -255,7 +324,8 @@ trade-offs:
 ## Credits
 
 - Memory model and on-disk format by **Victor Taelin** —
-  [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem).
+  [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem). The original
+  design animation is his work, linked (not rehosted) above.
 - Standalone Hermes integration, Windows locking, BM25/token search, the
   migration/mode tooling and CLI parity by the project contributors.
 

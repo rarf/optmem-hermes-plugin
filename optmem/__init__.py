@@ -296,9 +296,19 @@ class OptMemProvider(MemoryProvider):
         # already read config.yaml). The resolved, validated view lives in
         # self._config (optmem.config) and is rebuilt in initialize() against the
         # real profile home.
+        #
+        # The legacy fallback is read with our own PyYAML-based reader rather
+        # than the host's ``hermes_cli.config.load_config()``: the host's reader
+        # scaffolds HERMES_HOME (SOUL.md, logs/, sessions/, …) as a side effect,
+        # which must not happen from a provider being constructed during
+        # discovery/``register()``. ``initialize()`` re-resolves against the real
+        # profile anyway, so nothing is lost at session time.
         self._plugin_config: dict | None = dict(config) if config else None
         self._config: OptMemConfig = resolve_config(
-            _get_hermes_home(), self._plugin_config or _load_plugin_config()
+            _get_hermes_home(),
+            self._plugin_config
+            if self._plugin_config is not None
+            else legacy_plugin_config(_get_hermes_home()),
         )
         self._engine: OptMemEngine | None = None
         self._memory_dir: str | None = None
@@ -308,7 +318,13 @@ class OptMemProvider(MemoryProvider):
 
     @property
     def name(self) -> str:
-        return "optmem"
+        # Canonical registered name. It is NOT the bare upstream key: this
+        # plugin is an independent Hermes integration of Victor Taelin's OptMem
+        # design, not the upstream project, and the Hermes plugin catalog
+        # reserves the bare key for the affiliated project
+        # (plugin-catalog/README.md, "Names"). The Python package, the on-disk
+        # store keep their names; the CLI becomes `hermes optmem-hermes`.
+        return "optmem-hermes"
 
     def is_available(self) -> bool:
         # Pure-local, no credentials. Always available.
@@ -880,3 +896,33 @@ def _use_llm_summary() -> bool:
     if os.environ.get("OPTMEM_LLM_SUMMARY") == "1":
         return True
     return bool((_load_plugin_config() or {}).get("llm_summary", False))
+
+
+# ---------------------------------------------------------------------------
+# Host entry points
+# ---------------------------------------------------------------------------
+#
+# ``plugins/memory/__init__.py`` loads an out-of-tree memory provider by calling
+# its ``register(ctx)`` with a context exposing ``register_memory_provider``
+# (see also the merged ``entropicmem`` catalog entry). The provider is built
+# with NO config: ``initialize()`` re-resolves the real profile's configuration,
+# so anything read at registration time would belong to whichever profile the
+# loader happened to run under.
+#
+# Register the provider ONLY. Its nine tools and its ``on_memory_write`` /
+# ``on_turn_start`` hooks are exposed through the ``MemoryProvider`` interface,
+# which the host's ``MemoryManager`` wires directly (``get_tool_schemas`` for
+# tools, a per-provider fan-out for the hooks). Calling ``ctx.register_tool`` /
+# ``ctx.register_hook`` here would register that surface a second time — the
+# tools would appear twice to the model, and the hook names are not part of the
+# host's ``VALID_HOOKS`` dispatch set. So there is deliberately no such call.
+
+
+def register_memory_provider(ctx) -> None:
+    """Memory-provider discovery entry point (host: ``plugins/memory``)."""
+    ctx.register_memory_provider(OptMemProvider())
+
+
+def register(ctx) -> None:
+    """Plugin entry point the host's discovery calls with its plugin context."""
+    register_memory_provider(ctx)

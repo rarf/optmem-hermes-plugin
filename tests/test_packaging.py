@@ -80,7 +80,9 @@ def test_wheel_declares_memory_provider_entry_point(wheel: Path):
     entry_points = next(n for n in z.namelist() if n.endswith("entry_points.txt"))
     text = z.read(entry_points).decode()
     assert "[hermes_agent.memory_providers]" in text
-    assert "optmem = optmem" in text
+    # Canonical registered provider name, not the bare upstream project key.
+    assert "optmem-hermes = optmem" in text
+    assert "optmem = optmem" not in text
 
 
 def test_wheel_has_no_obsolete_plugin_entry_point(wheel: Path):

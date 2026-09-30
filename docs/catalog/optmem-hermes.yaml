@@ -1,0 +1,39 @@
+# Submission template, not a live catalog listing.
+# Replace this prior-source SHA with the final reviewed commit in the upstream PR.
+name: optmem-hermes
+repo: https://github.com/rarf/optmem-hermes-plugin
+sha: 1cae50030eb9651063d9f97ed2a0b3892e189811
+subdir: optmem
+description: >-
+  Independent Hermes integration of Victor Taelin's OptMem design: local,
+  append-only memory with regex/BM25 recall and a bounded wake digest.
+  Hybrid and guarded OptMem-only modes; verified migration and rollback.
+  No API keys or network calls by the memory engine. Summaries are lossy,
+  raw records remain recoverable, and conflicts are not resolved automatically.
+  Wake consumes model context. See README for upstream attribution.
+maintainer: rarf
+tier: community
+category: memory
+docs_url: https://github.com/rarf/optmem-hermes-plugin#readme
+version: "0.3.0"
+# Original upstream design animation, not a plugin screenshot; cross-repo immutable pin.
+image: https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif
+screenshots: []
+readme: true
+platforms: [linux, windows]
+capabilities:
+  provides_tools:
+    - optmem_note
+    - optmem_recall
+    - optmem_nap
+    - optmem_wake
+    - optmem_zoom
+    - optmem_forget
+    - optmem_config
+    - optmem_import
+    - optmem_init
+  provides_hooks:
+    - on_memory_write
+    - on_turn_start
+  provides_middleware: []
+  requires_env: []

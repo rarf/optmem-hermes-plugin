@@ -132,6 +132,12 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     sub.add_parser("rollback", parents=[suppress], help="Undo the last mode switch")
     sub.add_parser("version", parents=[suppress], help="Show the installed plugin version")
     subparser.set_defaults(optmem_action="status")
+    # Bind the handler ourselves. The host derives ``handler_fn`` as
+    # ``<memory.provider>_command`` (main.py:_attach_plugin_cli_command), which
+    # cannot exist for a hyphenated provider name like ``optmem-hermes``; the
+    # bundled honcho CLI binds ``func`` the same way. argparse propagates this
+    # default to the subcommands added above.
+    subparser.set_defaults(func=optmem_command)
 
 
 def optmem_command(args: argparse.Namespace) -> int:

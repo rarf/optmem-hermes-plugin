@@ -43,11 +43,14 @@ Issues = "https://github.com/rarf/optmem-hermes-plugin/issues"
 Changelog = "https://github.com/rarf/optmem-hermes-plugin/blob/main/CHANGELOG.md"
 
 # The memory-provider entry point group Hermes actually scans
-# (plugins/memory/__init__.py: ENTRY_POINTS_GROUP). The old 0.2.0 entry used
-# "hermes.plugins", which Hermes never reads for memory providers — and a
-# directory package declared via py-modules shipped an EMPTY wheel.
+# (plugins/memory/__init__.py: ENTRY_POINTS_GROUP). The key is the canonical
+# registered provider name (`memory.provider: optmem-hermes`), NOT the bare
+# upstream project key; the value is the Python package, which keeps its name.
+# The old 0.2.0 entry used "hermes.plugins", which Hermes never reads for memory
+# providers — and a directory package declared via py-modules shipped an EMPTY
+# wheel.
 [project.entry-points."hermes_agent.memory_providers"]
-optmem = "optmem"
+optmem-hermes = "optmem"
 
 [tool.setuptools]
 packages = ["optmem"]

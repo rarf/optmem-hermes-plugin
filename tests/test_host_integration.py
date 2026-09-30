@@ -84,7 +84,7 @@ EXPECTED_TOOLS = {
 
 HYBRID_CONFIG = (
     "# keep me\nagent:\n  max_turns: 100\n"
-    "memory:\n  provider: optmem\n  memory_enabled: true\n  user_profile_enabled: true\n"
+    "memory:\n  provider: optmem-hermes\n  memory_enabled: true\n  user_profile_enabled: true\n"
 )
 
 
@@ -124,8 +124,12 @@ def optmem_entry_point(monkeypatch):
 
 @pytest.fixture
 def installed(optmem_entry_point):
-    """An environment where the optmem distribution's entry point is installed."""
-    optmem_entry_point.append(_FakeEntryPoint("optmem", "optmem"))
+    """An environment where the optmem distribution's entry point is installed.
+
+    The entry-point *key* is the canonical registered provider name
+    (``optmem-hermes``); its value is the Python package, which keeps ``optmem``.
+    """
+    optmem_entry_point.append(_FakeEntryPoint("optmem-hermes", "optmem"))
     return optmem_entry_point
 
 
@@ -196,7 +200,7 @@ def _assert_real_optmem_provider(provider) -> None:
     assert type(provider).__name__ == "OptMemProvider"
     module = sys.modules[type(provider).__module__]
     assert Path(module.__file__).resolve().is_relative_to(PLUGIN_PACKAGE.resolve())
-    assert provider.name == "optmem"
+    assert provider.name == "optmem-hermes"
     assert _tool_names(provider) == EXPECTED_TOOLS
 
 
@@ -209,17 +213,19 @@ class TestHostDiscovery:
     def test_entry_point_metadata_matches_the_host_scanner(self):
         data = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         declared = data["project"]["entry-points"][host_memory.ENTRY_POINTS_GROUP]
-        assert declared == {"optmem": "optmem"}
+        # The key is the canonical registered provider name; the value is the
+        # Python package, which keeps its name.
+        assert declared == {"optmem-hermes": "optmem"}
 
     def test_provider_is_discovered_from_its_entry_point(self, installed, isolated_home):
-        assert "optmem" in host_memory.list_memory_provider_names()
-        found = host_memory.find_provider_dir("optmem")
+        assert "optmem-hermes" in host_memory.list_memory_provider_names()
+        found = host_memory.find_provider_dir("optmem-hermes")
         assert found is not None and found.resolve() == PLUGIN_PACKAGE.resolve()
         available = {name: ok for name, _desc, ok in host_memory.discover_memory_providers()}
-        assert available.get("optmem") is True
+        assert available.get("optmem-hermes") is True
 
     def test_provider_loads_with_its_full_tool_surface(self, installed, isolated_home):
-        provider = host_memory.load_memory_provider("optmem")
+        provider = host_memory.load_memory_provider("optmem-hermes")
         _assert_real_optmem_provider(provider)
 
     def test_project_local_copy_is_discovered_without_an_entry_point(self, tmp_path, monkeypatch):
@@ -230,13 +236,13 @@ class TestHostDiscovery:
         work = tmp_path / "work"
         plugins_dir = work / ".hermes" / "plugins"
         plugins_dir.mkdir(parents=True)
-        (plugins_dir / "optmem").symlink_to(PLUGIN_PACKAGE, target_is_directory=True)
+        (plugins_dir / "optmem-hermes").symlink_to(PLUGIN_PACKAGE, target_is_directory=True)
         monkeypatch.chdir(work)
         monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "1")
 
-        found = host_memory.find_provider_dir("optmem")
+        found = host_memory.find_provider_dir("optmem-hermes")
         assert found is not None and found.resolve() == PLUGIN_PACKAGE.resolve()
-        provider = host_memory.load_memory_provider("optmem")
+        provider = host_memory.load_memory_provider("optmem-hermes")
         _assert_real_optmem_provider(provider)
 
 
@@ -247,23 +253,29 @@ class TestHostDiscovery:
 
 class TestDeclaredConfigSchema:
     def test_host_loads_the_schema_by_path_as_real_dataclasses(self, installed, isolated_home):
-        module = host_memory.import_provider_module("optmem", "config_schema")
-        assert module.__file__ == str(PLUGIN_PACKAGE / "config_schema.py")
+        module = host_memory.import_provider_module("optmem-hermes", "config_schema")
+        # Host module caching may retain the project-local symlink path from
+        # discovery; both paths must resolve to the same real schema source.
+        assert Path(module.__file__).resolve() == (PLUGIN_PACKAGE / "config_schema.py").resolve()
         schema = module.CONFIG_SCHEMA
         assert isinstance(schema, host_config_schema.ProviderConfigSchema)
         assert isinstance(schema.fields[0], host_config_schema.ProviderField)
+        # The schema `name` is the declared-config *directory* key, not the
+        # registered provider name: keeping it `optmem` leaves the documented
+        # data path `<HERMES_HOME>/optmem/config.json` unchanged across the
+        # rename (see the upgrade notes).
         assert schema.name == "optmem"
         assert schema.storage == STORAGE_FLAT_JSON
         assert {field.key for field in schema.fields} == set(EDITABLE_KEYS)
         assert not [f for f in schema.fields if f.kind == host_config_schema.KIND_SECRET]
 
     def test_host_schema_cache_returns_the_same_schema(self, installed, isolated_home):
-        schema = host_config_schema.get_provider_config_schema("optmem")
+        schema = host_config_schema.get_provider_config_schema("optmem-hermes")
         assert schema is not None and schema.name == "optmem"
-        assert schema is host_config_schema.get_provider_config_schema("optmem")
+        assert schema is host_config_schema.get_provider_config_schema("optmem-hermes")
 
     def test_flat_json_storage_path_matches_the_plugins_resolver(self, installed, isolated_home):
-        schema = host_config_schema.get_provider_config_schema("optmem")
+        schema = host_config_schema.get_provider_config_schema("optmem-hermes")
         assert schema is not None
         # The host resolves flat_json to <HERMES_HOME>/<name>/config.json — exactly
         # the path optmem/config.py reads and writes.
@@ -271,7 +283,7 @@ class TestDeclaredConfigSchema:
 
     def test_host_reads_back_a_plugin_written_declared_config(self, installed, isolated_home):
         write_declared_config(isolated_home, {"mode": "optmem-only", "wake_budget": 8})
-        schema = host_config_schema.get_provider_config_schema("optmem")
+        schema = host_config_schema.get_provider_config_schema("optmem-hermes")
         data = _read_flat_json(schema)
         assert data["mode"] == "optmem-only"
         assert data["wake_budget"] == 8
@@ -286,25 +298,33 @@ class TestHostCliRegistration:
     def _command(self, home: Path):
         _write_hybrid_config(home)
         commands = host_memory.discover_plugin_cli_commands()
-        assert [command["name"] for command in commands] == ["optmem"]
+        assert [command["name"] for command in commands] == ["optmem-hermes"]
         command = commands[0]
-        assert callable(command["setup_fn"]) and callable(command["handler_fn"])
-        assert command["handler_fn"].__name__ == "optmem_command"
+        assert callable(command["setup_fn"])
+        # The host derives ``handler_fn`` as ``<memory.provider>_command``
+        # (main.py:_attach_plugin_cli_command); a hyphenated provider name has no
+        # such attribute, so the CLI binds ``func`` itself (like the bundled
+        # honcho CLI does) — see optmem/cli.py:register_cli.
+        assert command["handler_fn"] is None
         return command
 
     def _parse(self, command, argv):
         parser = argparse.ArgumentParser(prog="hermes")
         subparsers = parser.add_subparsers(dest="cmd")
-        command["setup_fn"](subparsers.add_parser("optmem"))
-        return parser.parse_args(["optmem", *argv])
+        sub = subparsers.add_parser("optmem-hermes")
+        command["setup_fn"](sub)
+        args = parser.parse_args(["optmem-hermes", *argv])
+        handler = getattr(args, "func", None)
+        assert callable(handler) and handler.__name__ == "optmem_command"
+        return args, handler
 
     def test_read_only_status_via_host_registration_writes_nothing(
         self, installed, isolated_home, capsys
     ):
         command = self._command(isolated_home)
         before = (isolated_home / "config.yaml").read_bytes()
-        args = self._parse(command, ["status", "--json"])
-        assert command["handler_fn"](args) == 0
+        args, handler = self._parse(command, ["status", "--json"])
+        assert handler(args) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["mode"] == "hybrid"
         assert payload["capabilities"]["semantic_conflict_resolution"] is False
@@ -316,8 +336,8 @@ class TestHostCliRegistration:
     ):
         command = self._command(isolated_home)
         before = (isolated_home / "config.yaml").read_bytes()
-        args = self._parse(command, ["mode", "optmem-only", "--json"])
-        assert command["handler_fn"](args) != 0
+        args, handler = self._parse(command, ["mode", "optmem-only", "--json"])
+        assert handler(args) != 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["ok"] is False
         assert (isolated_home / "config.yaml").read_bytes() == before
@@ -330,9 +350,9 @@ class TestHostCliRegistration:
         # The host imports cli.py BY PATH under a synthetic package shell that
         # never executes optmem/__init__.py, so a package-relative
         # `from . import __version__` would raise ImportError here.
-        assert command["handler_fn"].__module__.startswith("_hermes_user_memory.")
-        args = self._parse(command, ["version", "--json"])
-        assert command["handler_fn"](args) == 0
+        args, handler = self._parse(command, ["version", "--json"])
+        assert handler.__module__.startswith("_hermes_user_memory.")
+        assert handler(args) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["version"] == _plugin_manifest_version()
 
@@ -343,8 +363,8 @@ class TestHostCliRegistration:
         # A stale editable install must not misreport the by-path copy the host
         # actually loaded.
         monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.0.0-stale")
-        args = self._parse(command, ["version", "--json"])
-        assert command["handler_fn"](args) == 0
+        args, handler = self._parse(command, ["version", "--json"])
+        assert handler(args) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["version"] == _plugin_manifest_version()
 
@@ -366,7 +386,7 @@ class TestNativeSurfaceExclusivity:
         agent = _NudgeStub(object())
         assert [_tick_memory_nudge(agent) for _ in range(3)] == [False, False, True]
 
-        provider = host_memory.load_memory_provider("optmem")
+        provider = host_memory.load_memory_provider("optmem-hermes")
         assert _tool_names(provider) == EXPECTED_TOOLS
 
     def test_optmem_only_disables_the_native_memory_surface(self, installed, isolated_home):
@@ -388,7 +408,7 @@ class TestNativeSurfaceExclusivity:
         agent = _NudgeStub(None)
         assert [_tick_memory_nudge(agent) for _ in range(4)] == [False, False, False, False]
         # OptMem itself is still the active store.
-        provider = host_memory.load_memory_provider("optmem")
+        provider = host_memory.load_memory_provider("optmem-hermes")
         assert _tool_names(provider) == EXPECTED_TOOLS
 
     def test_switching_back_to_hybrid_restores_the_native_surface(self, installed, isolated_home):
