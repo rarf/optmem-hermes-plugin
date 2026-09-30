@@ -5,13 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-09-30
 
 ### Added
-- **`hermes optmem` CLI** (`optmem/cli.py`) — `status`, `show`, `check`,
+- **`hermes optmem-hermes` CLI** (`optmem/cli.py`) — `status`, `show`, `check`,
   `migrate`, `mode`, `import`, `rollback`, `version`, with `--json` and
   `--hermes-home PATH`. Read-only commands create and modify nothing.
-- **Hybrid / OptMem-only modes** — `hermes optmem mode optmem-only --yes` turns
+- **Hybrid / OptMem-only modes** — `hermes optmem-hermes mode optmem-only --yes` turns
   off the built-in `MEMORY.md`/`USER.md` store only after a verified migration
   (every native entry present in the store) and a native backup. Without `--yes`
   the command refuses and writes nothing. `rollback` restores the previous
@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<HERMES_HOME>/optmem/config.json`) — mode, memory_dir, wake_budget,
   recall_mode, auto_nap, llm_summary, migration_split_long, rendered by Hermes'
   generic memory-provider panel. Precedence: declared → legacy `config.yaml`
-  keys → defaults. (`llm_summary` is reserved — see Fixed.)
+  keys → defaults. LLM summaries are opt-in and disabled by default.
 - **Migration tooling** (`optmem/migrate.py`) — byte-for-byte native backups
   with a sha256 manifest, an idempotent import that never drops a fact, safe
   splitting of over-long entries (`--split`), and a blocked plan that exits
@@ -31,13 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token/BM25 for prose) on top of `regex` (`memo` parity) and `bm25`.
 - **Docs**: README rewritten to state only verifiable behaviour — the log grows
   one fixed-width record per memory (the *injected context* is what stays
-  bounded), retrieval/compression are LLM-free while the wake digest does spend
+  bounded), retrieval/default compression are LLM-free while the wake digest does spend
   context tokens, `forget` drops summaries only, and there is no semantic
   conflict resolution. The built-in/Honcho comparison no longer asserts
   unverified internals of other products. SECURITY.md and `config.example.yaml`
-  updated (supported version, dependencies, real keys and defaults). 0.3.0 is
-  **unreleased**: the README no longer points at a non-existent `v0.3.0` tag or
-  `optmem-hermes-plugin==0.3.0` artifact, and instead pins an exact source commit.
+  updated with supported versions, optional dependencies, real keys and defaults.
+  Installation uses the versioned GitHub release; PyPI availability is not assumed.
 
 ### Fixed
 - **`hermes optmem version` under the host's by-path load.** The host imports
@@ -53,12 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emit a JSON error and exit non-zero, leaving the native file byte-for-byte
   unchanged and creating no store. Only `NativeReadError` was added to the
   handler's catch, so other exceptions still surface.
-- **Corrected the inert `llm_summary` claim.** 0.2.0 documented `llm_summary`
-  (and `OPTMEM_LLM_SUMMARY=1`) as letting the host LLM write the compacted line;
-  no such path was ever wired, and compaction has always used the local,
-  LLM-free extractive summarizer. The setting is now documented as reserved and
-  without effect. That extractor is lossy for detail: a summary can omit facts,
-  and the raw records surviving does not mean the summary kept every fact.
+- **Functional opt-in LLM summaries.** Disabled by default; host-owned
+  `PluginLlm` routes calls through `auxiliary.optmem_summary`, inheriting the
+  configured Hermes model unless explicitly overridden. The version-sensitive
+  memory-context bridge preserves host identity and trust gates. Invalid replies
+  and unavailable hosts fall back to local extraction. Enabling this sends memory
+  blocks to the selected provider and may incur token costs; raw records remain.
+- **Clean admission and Doctor checks.** Memory lifecycle methods are not generic
+  plugin hooks; the manifest no longer declares unsupported hook names.
+- **Background-review isolation.** Non-primary writes do not mirror into memory.
 
 ## [0.2.0] - 2026-08-09
 

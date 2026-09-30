@@ -53,14 +53,17 @@ import agent.prompt_builder as host_prompt_builder  # noqa: E402
 import plugins.memory as host_memory  # noqa: E402
 import tools.memory_tool as host_memory_tool  # noqa: E402
 from agent.turn_context import _tick_memory_nudge  # noqa: E402
+from hermes_cli.plugins import get_plugin_auxiliary_tasks  # noqa: E402
 from hermes_cli.web_routers.memory_providers import _flat_json_path, _read_flat_json  # noqa: E402
 from plugins.memory import config_schema as host_config_schema  # noqa: E402
 from plugins.memory.config_schema import STORAGE_FLAT_JSON  # noqa: E402
 
 from optmem import (  # noqa: E402
+    SUMMARY_AUX_TASK,
     OptMemProvider,
     migrate,
 )
+from optmem import register as optmem_register  # noqa: E402
 from optmem.config import (  # noqa: E402
     EDITABLE_KEYS,
     declared_config_path,
@@ -469,3 +472,302 @@ class TestLocalOnly:
         assert Path(provider._memory_dir).is_relative_to(home)
         assert (home / "optmem_memory" / "LOG.txt").exists()
         assert Path(resolve_config(home).memory_dir).is_relative_to(home)
+
+
+# ---------------------------------------------------------------------------
+# Plugin Doctor: the manifest must describe a memory provider's real surface
+# ---------------------------------------------------------------------------
+
+
+class TestHostPluginDoctor:
+    def test_doctor_reports_no_errors_and_no_capability_mismatches(self):
+        """``hermes plugins doctor`` (the real runtime contract) must be clean.
+
+        A memory provider exposes its tools and lifecycle hooks through the
+        ``MemoryProvider`` interface — ``get_tool_schemas`` / ``on_memory_write``
+        / ``on_turn_start`` — which the host's ``MemoryManager`` wires directly.
+        It does NOT register them through the plugin SDK, so the manifest must
+        declare neither ``provides_tools`` nor ``provides_hooks``:
+
+        * ``provides_hooks`` names outside ``VALID_HOOKS`` (``on_memory_write``,
+          ``on_turn_start`` are not plugin hooks) are hard Doctor ERRORS, and
+        * a declared-but-unregistered tool/hook is a Doctor WARNING.
+
+        Every bundled provider (honcho, mem0, holographic) declares neither
+        list for exactly this reason.
+        """
+        host_dev = pytest.importorskip("hermes_cli.plugin_dev")
+        report = host_dev.doctor_plugin(PLUGIN_PACKAGE)
+        errors = [f.message for f in report.findings if f.level == "error"]
+        mismatches = [f.message for f in report.findings if "did not add it" in f.message]
+        assert errors == [], errors
+        assert mismatches == [], mismatches
+        assert report.ok
+
+
+# ---------------------------------------------------------------------------
+# Opt-in LLM summaries: native auxiliary task + real PluginLlm facade
+# ---------------------------------------------------------------------------
+
+
+def _owner_ctx():
+    """A REAL ``PluginContext`` for the plugin id, plus a provider capture shim.
+
+    The plugin is an *exclusive* (memory) plugin, so the general PluginManager
+    never calls its ``register(ctx)``; we build the same ``PluginContext`` the
+    manager would and drive the plugin through it. The shim records the provider
+    instance while forwarding ``register_auxiliary_task`` and ``llm`` to the real
+    context, so the test observes both registrations and facade capture.
+    """
+    from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
+
+    manager = get_plugin_manager()
+    real = PluginContext(PluginManifest(name="optmem-hermes", key="optmem-hermes"), manager)
+    captured: dict = {}
+
+    class _Shim:
+        @property
+        def plugin_id(self):
+            return real.plugin_id
+
+        @property
+        def llm(self):
+            return real.llm
+
+        def register_auxiliary_task(self, *args, **kwargs):
+            return real.register_auxiliary_task(*args, **kwargs)
+
+        def register_memory_provider(self, provider):
+            captured["provider"] = provider
+
+    return real, _Shim(), captured
+
+
+def _fake_response(text: str):
+    import types
+
+    return types.SimpleNamespace(
+        model="fake-model",
+        usage=types.SimpleNamespace(prompt_tokens=4, completion_tokens=6, total_tokens=10),
+        choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=text))],
+    )
+
+
+class TestLlmSummaryHostIntegration:
+    def test_register_adds_the_plugin_owned_auxiliary_task(self, installed, isolated_home):
+        get_plugin_auxiliary_tasks()  # trigger idempotent discovery first
+        real, shim, captured = _owner_ctx()
+        optmem_register(shim)
+
+        entry = next(
+            (e for e in get_plugin_auxiliary_tasks() if e["key"] == SUMMARY_AUX_TASK), None
+        )
+        assert entry is not None, "optmem_summary was not registered on the host"
+        assert entry["plugin"] == real.plugin_id
+        assert entry["display_name"] == "OptMem summaries"
+        assert entry["defaults"]["provider"] == "auto"
+        assert entry["defaults"]["model"] == ""
+        assert entry["defaults"]["timeout"] == 60
+        # The provider captured the SUPPORTED facade handed to it by register().
+        assert captured["provider"]._summary_llm() is real.llm
+
+    def test_aux_task_routes_through_a_real_plugin_llm_without_credentials(
+        self, installed, isolated_home
+    ):
+        from agent.plugin_llm import _TrustPolicy, make_plugin_llm_for_test
+
+        get_plugin_auxiliary_tasks()
+        real, shim, _ = _owner_ctx()
+        optmem_register(shim)
+
+        captured: dict = {}
+
+        def fake_transport(**kwargs):
+            captured.update(kwargs)
+            return "fake", "fake-model", _fake_response("resumo do bloco")
+
+        llm = make_plugin_llm_for_test(
+            plugin_id=real.plugin_id,
+            policy=_TrustPolicy(plugin_id=real.plugin_id),
+            sync_caller=fake_transport,
+        )
+        result = llm.complete(
+            [{"role": "user", "content": "hi"}],
+            task=SUMMARY_AUX_TASK,
+            max_tokens=120,
+            temperature=0.1,
+            purpose="optmem.auto_nap",
+        )
+        # The task gate allowed the plugin's OWN task and routed it; no creds used.
+        assert captured["task"] == SUMMARY_AUX_TASK
+        assert captured["max_tokens"] == 120
+        assert result.text == "resumo do bloco"
+
+    def test_foreign_auxiliary_task_is_denied(self, installed, isolated_home):
+        from agent.plugin_llm import PluginLlmTrustError, _TrustPolicy, make_plugin_llm_for_test
+
+        get_plugin_auxiliary_tasks()
+        real, shim, _ = _owner_ctx()
+        optmem_register(shim)
+
+        llm = make_plugin_llm_for_test(
+            plugin_id=real.plugin_id,
+            policy=_TrustPolicy(plugin_id=real.plugin_id),
+            sync_caller=lambda **kw: ("fake", "fake", _fake_response("x")),
+        )
+        with pytest.raises(PluginLlmTrustError):
+            llm.complete([{"role": "user", "content": "hi"}], task="compression")
+
+    def test_aux_config_resolver_layers_plugin_defaults_under_user_config(
+        self, installed, isolated_home
+    ):
+        from agent.auxiliary_client import _get_auxiliary_task_config, _get_task_timeout
+
+        get_plugin_auxiliary_tasks()
+        real, shim, _ = _owner_ctx()
+        optmem_register(shim)
+
+        # No user config: the plugin's declared defaults are the effective route.
+        defaults = _get_auxiliary_task_config(SUMMARY_AUX_TASK)
+        assert defaults["provider"] == "auto"
+        assert defaults["model"] == ""
+        assert _get_task_timeout(SUMMARY_AUX_TASK) == 60
+
+        # The operator overrides provider/model in config.yaml; timeout default stays.
+        (isolated_home / "config.yaml").write_text(
+            "auxiliary:\n  optmem_summary:\n    provider: openrouter\n    model: vendor/model-x\n",
+            encoding="utf-8",
+        )
+        from hermes_cli.config import load_config_readonly
+
+        cache_clear = getattr(load_config_readonly, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+        overridden = _get_auxiliary_task_config(SUMMARY_AUX_TASK)
+        assert overridden["provider"] == "openrouter"
+        assert overridden["model"] == "vendor/model-x"
+        assert overridden["timeout"] == 60  # plugin default preserved
+
+    def test_memory_loader_context_borrows_a_compatible_facade(
+        self, installed, isolated_home
+    ):
+        """The approved bridge, stated as a fact.
+
+        ``_ProviderCollector`` still forwards only ``register_*`` calls, so the
+        public ``ctx.llm`` raises AttributeError — but its private
+        ``_plugin_context()`` returns a REAL ``PluginContext`` whose identity is
+        the SAME provider name we register ``optmem_summary`` under. The adapter
+        borrows that facade, so LLM summaries work on the real memory-provider
+        path with no host change. Public ``ctx.llm`` always wins when present.
+        """
+        from optmem import _capture_summary_facade, _register_summary_aux_task
+
+        get_plugin_auxiliary_tasks()  # idempotent discovery first (registry is stable)
+        collector = host_memory._ProviderCollector("optmem-hermes")
+        with pytest.raises(AttributeError):
+            _ = collector.llm  # the public surface still has no llm
+        facade = _capture_summary_facade(collector)
+        assert facade is not None, "the compatibility bridge should hand back a facade"
+        assert type(facade).__name__ == "PluginLlm"
+        assert facade._plugin_id == "optmem-hermes"
+        # register_* forwards, so the auxiliary task registers under the same owner.
+        assert _register_summary_aux_task(collector) is True
+        entry = next(e for e in get_plugin_auxiliary_tasks() if e["key"] == SUMMARY_AUX_TASK)
+        assert entry["plugin"] == "optmem-hermes"
+
+    def test_loader_provider_captures_the_borrowed_facade(self, installed, isolated_home):
+        provider = host_memory.load_memory_provider("optmem-hermes")
+        _assert_real_optmem_provider(provider)
+        facade = provider._summary_llm()
+        assert facade is not None, "the loader path now has a real facade"
+        assert type(facade).__name__ == "PluginLlm"
+        # The directory loader binds identity to the package basename; pip binds
+        # it to the entry-point key. Preserve that host-owned trust identity.
+        provider_dir = host_memory.find_provider_dir("optmem-hermes")
+        expected_identity = provider_dir.name if provider_dir else "optmem-hermes"
+        assert facade._plugin_id == expected_identity
+
+    def test_collector_facade_capture_is_write_free(self, installed, tmp_path, monkeypatch):
+        """Borrowing the facade must not scaffold HERMES_HOME or write anything."""
+        from optmem import _capture_summary_facade
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        before = sorted(p.relative_to(home) for p in home.rglob("*"))
+        collector = host_memory._ProviderCollector("optmem-hermes")
+        assert _capture_summary_facade(collector) is not None
+        after = sorted(p.relative_to(home) for p in home.rglob("*"))
+        assert after == before, "facade capture must not write to disk"
+
+    def test_provider_falls_back_to_local_when_the_bridge_is_incompatible(
+        self, installed, isolated_home, monkeypatch
+    ):
+        """Fail-closed end-to-end: a borrowed context whose identity is NOT our
+        provider name yields no facade, so the provider keeps its local extractor."""
+        from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
+
+        from optmem import register_memory_provider
+
+        get_plugin_auxiliary_tasks()
+        collector = host_memory._ProviderCollector("optmem-hermes")
+        collector._context = PluginContext(
+            PluginManifest(name="someone-else", key="someone-else"), get_plugin_manager()
+        )
+        register_memory_provider(collector)
+        provider = collector.provider
+        _assert_real_optmem_provider(provider)
+        assert provider._summary_llm() is None  # incompatible bridge → no facade
+
+        monkeypatch.setenv("OPTMEM_LLM_SUMMARY", "1")
+        provider.initialize("s", hermes_home=str(isolated_home))
+        provider.handle_tool_call("optmem_note", {"text": "cliente X aprovou orcamento Q3"})
+        provider.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})
+        provider.on_turn_start(10, "trigger")
+        assert (0, 2) not in provider._engine.pending_naps()
+        summary = provider._engine._tree_get(0, 2)
+        assert "aprov" in summary or "deploy" in summary
+
+    def test_collector_provider_completes_through_the_borrowed_facade_without_network(
+        self, installed, isolated_home
+    ):
+        """End-to-end: the collector's provider completes through a REAL
+        ``PluginLlm`` whose transport is the host's supported test injection
+        (``make_plugin_llm_for_test``) — no network, no credentials."""
+        from agent.plugin_llm import _TrustPolicy, make_plugin_llm_for_test
+
+        from optmem import register_memory_provider
+        from optmem.config import write_declared_config
+
+        get_plugin_auxiliary_tasks()
+        collector = host_memory._ProviderCollector("optmem-hermes")
+        real = collector._plugin_context()
+        captured: dict = {}
+
+        def transport(**kwargs):
+            captured.update(kwargs)
+            return "fake", "fake-model", _fake_response("resumo do bloco")
+
+        # ``PluginContext.__init__`` documents that tests preseed the lazy facade.
+        real._llm = make_plugin_llm_for_test(
+            plugin_id=real.plugin_id,
+            policy=_TrustPolicy(plugin_id=real.plugin_id),
+            sync_caller=transport,
+        )
+        register_memory_provider(collector)
+        provider = collector.provider
+        _assert_real_optmem_provider(provider)
+        assert provider._summary_llm() is real.llm  # the borrowed facade
+
+        # Enable the opt-in through the declared config (the supported path).
+        write_declared_config(isolated_home, {"llm_summary": True})
+        provider.initialize("s", hermes_home=str(isolated_home))
+        provider.handle_tool_call("optmem_note", {"text": "cliente X aprovou orcamento Q3"})
+        provider.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})
+        provider.on_turn_start(10, "trigger")
+
+        assert captured["task"] == SUMMARY_AUX_TASK
+        assert captured["max_tokens"] == 120
+        assert captured["temperature"] == 0.1
+        assert provider._engine._tree_get(0, 2) == "resumo do bloco"
+        assert (0, 2) not in provider._engine.pending_naps()

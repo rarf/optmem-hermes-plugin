@@ -18,7 +18,9 @@ The catalog has no free-form `tags` field. Category, tier and capability chips a
 
 ## Visual and attribution
 
-Victor Taelin's original animation, linked rather than copied or rehosted:
+The original owner-supplied diagram is preserved at `docs/assets/catalog-banner.png` (1912×1058). The card uses `docs/assets/catalog-banner-card.png` (2116×1058), with white horizontal padding for an exact 2:1 ratio and no cropping of the diagram. The owner confirmed authorship and explicitly authorized public redistribution. Pin the image URL to the same final source commit as the catalog entry; the current template URL is a placeholder and does not yet resolve.
+
+The README starts with Victor Taelin's original animation, linked rather than copied or rehosted:
 
 https://raw.githubusercontent.com/VictorTaelin/OptMem/1fb164cf39028047781f72ac3bb1e5a691c1dcb0/anim/optmem.gif
 

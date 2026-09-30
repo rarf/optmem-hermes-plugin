@@ -1,4 +1,4 @@
-"""``hermes optmem`` — the config interface for the OptMem memory provider.
+"""``hermes optmem-hermes`` — the config interface for the OptMem memory provider.
 
 Wiring (``plugins/memory/__init__.py`` + ``hermes_cli/main.py``): the host
 imports this file BY PATH during argparse setup and calls
@@ -44,7 +44,7 @@ from .migrate import (
     rollback_mode,
 )
 
-PROG = "hermes optmem"
+PROG = "hermes optmem-hermes"
 
 # What the provider actually does; mirrors OptMemProvider.capabilities() without
 # importing the provider (see the module docstring).
@@ -52,7 +52,17 @@ CAPABILITIES: dict[str, Any] = {
     "structural_chaining": True,
     "semantic_conflict_resolution": False,
     "append_only": True,
+    # The store, retrieval and the DEFAULT compaction are local (no credentials,
+    # no network). LLM summaries are opt-in (`llm_summary`) and, when enabled and
+    # a host facade is reachable, send pending decay-block lines to the user's
+    # configured model provider via the host PluginLlm (task `optmem_summary`).
     "local_only": True,
+    "llm_summary": {
+        "default": "off",
+        "transmission": "opt-in — sends pending decay-block lines to the user's "
+        "configured model provider via the host PluginLlm",
+        "task": "optmem_summary",
+    },
 }
 
 _LIMITS = (
@@ -83,7 +93,7 @@ def _add_common(parser: argparse.ArgumentParser, *, suppress: bool) -> None:
 
 
 def register_cli(subparser: argparse.ArgumentParser) -> None:
-    """Build the ``hermes optmem <action>`` tree (called by the host)."""
+    """Build the ``hermes optmem-hermes <action>`` tree (called by the host)."""
     subparser.description = (
         "Inspect and configure the OptMem memory provider: store location, wake "
         "budget, retrieval mode, native migration and the Hybrid/OptMem-only switch."
@@ -411,7 +421,7 @@ def _cmd_migrate(home: Path, as_json: bool, *, split: bool, dry_run: bool) -> in
     ]
     if plan.split_count:
         lines.append(f"{plan.split_count} over-long entr(y/ies) split on safe boundaries")
-    lines.append("run `hermes optmem mode optmem-only --yes` to make OptMem the only store")
+    lines.append("run `hermes optmem-hermes mode optmem-only --yes` to make OptMem the only store")
     _emit(payload, as_json, lines)
     return 0
 
@@ -442,7 +452,8 @@ def _cmd_mode(home: Path, target_mode: str, as_json: bool, *, yes: bool, split: 
     lines = [
         f"mode: {result['mode']}",
         f"config.yaml: {result['changes']} (previous file kept at {result.get('config_backup')})",
-        "restart the gateway for the change to take effect; `hermes optmem rollback` undoes it",
+        "restart the gateway for the change to take effect; "
+        "`hermes optmem-hermes rollback` undoes it",
     ]
     _emit(result, as_json, lines)
     return 0

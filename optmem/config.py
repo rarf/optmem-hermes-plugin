@@ -1,7 +1,7 @@
 """OptMem configuration resolution.
 
 Single source of truth for the provider's effective settings, shared by the
-provider, the migration/readiness logic and the ``hermes optmem`` CLI.
+provider, the migration/readiness logic and the ``hermes optmem-hermes`` CLI.
 
 Precedence (highest first):
 

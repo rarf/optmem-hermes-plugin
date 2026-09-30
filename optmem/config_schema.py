@@ -132,7 +132,7 @@ _MODE_INFO = (
     "Hybrid: OptMem runs alongside the built-in MEMORY.md/USER.md store; nothing about "
     "it changes. OptMem-only: the built-in store is switched off (memory_enabled and "
     "user_profile_enabled both false) so only OptMem is active. OptMem-only requires a "
-    "verified migration + native backup and is applied by `hermes optmem mode optmem-only`; "
+    "verified migration + native backup and is applied by `hermes optmem-hermes mode optmem-only`; "
     "changing the value here only records the intent."
 )
 _RECALL_INFO = (
@@ -147,11 +147,21 @@ _NAP_INFO = (
     "durable signal is left raw rather than losing data."
 )
 _LLM_INFO = (
-    "Reserved — not yet wired. Compaction always uses the deterministic, LLM-free "
-    "extractive summarizer; there is no automatic host-LLM path today, so this setting "
-    "currently has no effect. That extractor is lossy for detail: a summary can omit "
-    "facts from its block even though the raw LOG.txt records survive and optmem_zoom "
-    "walks back down to them."
+    "Off by default. When on AND the host exposes its supported PluginLlm facade, "
+    "pending decay blocks are summarized by the host LLM through that facade, "
+    "routed by the plugin-owned native auxiliary task `optmem_summary`. The task "
+    "slot defaults to provider `auto` / model `''` (the host's configured model); "
+    "set provider/model/timeout under `auxiliary.optmem_summary` or pick the "
+    "`OptMem summaries` task in `hermes model`. The host owns auth, routing and "
+    "fallback — the plugin supplies no keys. When the facade is unavailable (a "
+    "host that does not hand it to memory providers, or a version-dependent "
+    "private bridge that fails closed) or the reply is an error, empty, "
+    "multi-line or oversized, the local LLM-free extractor runs instead, so a "
+    "block is never lost. Memory lines are sent as UNTRUSTED DATA, and enabling "
+    "this sends pending block lines to the selected provider (network egress, "
+    "tokens/cost). The local extractor is lossy for detail: a summary can omit "
+    "facts from its block even though the raw LOG.txt records survive and "
+    "optmem_zoom walks back down to them."
 )
 _SPLIT_INFO = (
     "Off by default. When a native MEMORY.md/USER.md entry exceeds 280 UTF-8 bytes the "
@@ -225,7 +235,9 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="LLM summaries",
             kind=KIND_BOOL,
             description=(
-                "Reserved; no effect yet — compaction is always the local LLM-free extractor."
+                "Opt-in: summarize decay blocks with the host LLM (auxiliary task "
+                "`optmem_summary`; sends block lines to the selected provider). "
+                "Off = the local LLM-free extractor."
             ),
             info=_LLM_INFO,
             default="false",

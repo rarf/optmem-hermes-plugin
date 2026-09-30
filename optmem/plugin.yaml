@@ -7,21 +7,13 @@ description: "OptMem — permanent append-only memory with decay compression and
 # project (plugin-catalog/README.md, "Names"). The Python package, the on-disk
 # store keep their names; the CLI becomes `hermes optmem-hermes`.
 #
-# One capability declaration only. `hermes plugins validate` diffs these lists
-# against what register() actually wires, so keep them exact: the provider
-# exposes these nine tools through `get_tool_schemas()` and these two lifecycle
-# hooks through the MemoryProvider interface (called by the host's
-# MemoryManager), not through ctx.register_tool / ctx.register_hook.
-provides_tools:
-  - optmem_note
-  - optmem_recall
-  - optmem_nap
-  - optmem_wake
-  - optmem_zoom
-  - optmem_forget
-  - optmem_config
-  - optmem_import
-  - optmem_init
-provides_hooks:
-  - on_memory_write
-  - on_turn_start
+# NO provides_tools / provides_hooks. A memory provider is a different contract
+# from a plugin: its tools and lifecycle hooks are exposed through the
+# MemoryProvider interface (`get_tool_schemas`, `on_memory_write`,
+# `on_turn_start`), which the host's MemoryManager wires directly — never
+# through ctx.register_tool / ctx.register_hook. Declaring them here makes
+# `hermes plugins doctor` fail: `on_memory_write`/`on_turn_start` are not in the
+# host's VALID_HOOKS (hard ERROR), and a declared-but-unregistered tool/hook is a
+# WARNING. Every bundled provider (honcho, mem0, holographic, …) declares
+# neither list. The catalog entry (docs/catalog/optmem-hermes.yaml) is where the
+# interface surface is listed for discovery, matching cognee and entropicmem.
