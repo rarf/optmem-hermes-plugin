@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # sync_upstream.sh — keep OptMem-Hermes aligned with Victor Taelin's OptMem.
 #
-# This does NOT auto-merge code. It fetches the upstream `memo` tool and runs
-# a byte-compatibility check against THIS engine's on-disk format, so you are
-# alerted the moment upstream changes a record size, the TREE layout, or the
-# cover/decay math that OptMem-Hermes depends on.
+# This does NOT auto-merge code. It fetches the upstream `memo` tool, compares
+# only LOG_REC, TREE_REC, and RAW_MAX with this repo's engine constants, and
+# runs this repo's local test suite. It detects drift in those three constants
+# or test failures; it does not verify the full TREE layout, cover/decay math,
+# or overall byte compatibility.
 #
 # Uses Python (urllib) for the download so it works on both Windows (MSYS) and
 # Unix without depending on a working `curl` binary.
 #
 # Usage:  ./scripts/sync_upstream.sh
-# Exit 0 = upstream format still compatible.  Exit 1 = drift detected.
+# Exit 0 = the three constants match and local tests pass.
+# Exit 1 = drift or a test failure.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
