@@ -23,12 +23,10 @@ memory:
   #                           # turn of each session (a reading budget, not a
   #                           # storage cap)
   #   recall_mode: auto       # auto | regex | bm25
-  #   auto_nap: true          # drain pending compressions every ~10 turns
-  #   llm_summary: false      # opt-in (default off): summarize decay blocks with
-  #                           # the host LLM through the native auxiliary task
-  #                           # `auxiliary.optmem_summary`; sends the pending block
-  #                           # lines to the selected provider. Off = the local,
-  #                           # LLM-free extractor. See docs/reference.md
+  #   auto_nap: false         # opt-in: drain pending compressions every ~10 turns
+  #                           # (default off, matching upstream memo)
+  #   llm_summary: false      # opt-in, and only with auto_nap on: host LLM via
+  #                           # `auxiliary.optmem_summary`. Both off = no egress.
   #   migration_split_long: false  # split native entries over 280 bytes on
   #                                # migration instead of stopping
   #   memory_dir: "${HERMES_HOME}/optmem_memory"   # default store location

@@ -31,7 +31,7 @@ It explains the upstream design, not this plugin's UI. The image is pinned to a 
 1. Full tests, lint, wheel build, real-host integration and independent final-commit review.
 2. `hermes plugins validate --install-deps optmem --json`: actual registration must match declared capabilities.
 3. `python <hermes-agent>/scripts/validate_plugin_catalog.py docs/catalog/optmem-hermes.yaml`.
-4. Verify the remote main SHA after merge. Decide and authorize publication of the corresponding release/tag; 0.3.0 is currently unreleased.
+4. Verify the remote main SHA after merge and publish the matching release tag.
 5. Prepare the upstream entry with that exact 40-character SHA and matching version.
 6. Verify pinned README/image URLs, open the owner-submitted upstream PR, and inspect CI/readback.
 

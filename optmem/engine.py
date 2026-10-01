@@ -40,6 +40,26 @@ WAKE_LINES = 96           # ~8k tokens of context printed by wake (memo default)
 ENTRY_CHARS = 280         # longest one memory line, in bytes
 
 
+class WakeNeedsCompression(Exception):
+    """A required block summary is missing; the wake digest is incomplete.
+
+    Carries the partially rendered context and the next nap prompt (in
+    ``result``) so a caller can surface the compression-needed response instead
+    of papering over the hole with a placeholder line. Mirrors upstream
+    ``memo wake`` refusing with "Cannot wake" while a needed summary is
+    uncompressed.
+    """
+
+    def __init__(self, result: dict):
+        missing = result.get("missing", [])
+        super().__init__(
+            "wake needs "
+            + ", ".join(f"#{lo}-{hi - 1}" for lo, hi in missing)
+            + " compressed before it can be complete"
+        )
+        self.result = result
+
+
 # ---------------------------------------------------------------------------
 # Portable advisory lock
 # ---------------------------------------------------------------------------
@@ -175,6 +195,20 @@ def _parse(line: str) -> tuple[int, str, str]:
     head, _, rest = line.partition(" ")
     date, _, text = rest.partition(" ")
     return int(head[1:]), date, text
+
+
+def validate_block(lo: int, hi: int) -> str | None:
+    """Return an error string unless ``(lo, hi)`` is a real block id.
+
+    A block is an aligned power-of-two range, ``hi`` EXCLUSIVE — exactly what
+    ``wake`` prints (``#16-31`` -> ``lo=16, hi=32``). Mirrors upstream
+    ``memo``'s ``block_id``: without the shape check, ``4-5`` and ``5-6`` would
+    both read record 5. ``None`` means valid.
+    """
+    n = hi - lo
+    if n < 2 or (n & (n - 1)) or lo % n or lo < 0:
+        return f"{lo}-{hi - 1} is not a block. Copy the id printed by optmem_wake, like 16-31."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -352,23 +386,78 @@ class OptMemEngine:
 
     # -- reads --------------------------------------------------------------
 
-    def wake_lines(self, budget: int = WAKE_LINES) -> list[str]:
-        """Return the memory context (recent verbatim, old collapsed)."""
+    def wake(self, budget: int | None = None) -> dict:
+        """Render the wake digest with completeness metadata.
+
+        Mirrors upstream ``memo wake``: a block in the cover whose summary is
+        missing means the document cannot be written completely, so it is
+        reported (``complete=False`` + ``missing`` + the next ``nap`` prompt)
+        rather than papered over with a placeholder. A raw-only store — every
+        cover block a single record — is always complete, so a legitimate
+        verbatim wake is never dropped.
+
+        ``budget`` is the reading budget (lines printed). ``None`` uses the
+        per-store ``config`` ``WAKE_LINES`` (memo parity) or the module default.
+        """
+        if not isinstance(budget, int) or budget < 1:
+            budget = self.read_config().get("WAKE_LINES", WAKE_LINES)
+        if not isinstance(budget, int) or budget < 1:
+            budget = WAKE_LINES
         T = self.log_len()
         if T == 0:
-            return []
-        out: list[str] = []
+            return {
+                "lines": [],
+                "complete": True,
+                "missing": [],
+                "pending": [],
+                "nap": None,
+                "rebuild": [],
+                "budget": budget,
+            }
+        lines: list[str] = []
+        missing: list[tuple[int, int]] = []
         for lo, hi in cover(T, budget):
             if hi - lo == 1:
-                mid, date, text = self._log_slice(lo, hi)[0]
-                out.append(f"#{mid} {date} {text}")
+                rec = self._log_slice(lo, hi)
+                if not rec:
+                    continue
+                mid, date, text = rec[0]
+                lines.append(f"#{mid} {date} {text}")
             else:
                 s = self._tree_get(lo, hi)
                 if s is None:
-                    out.append(f"#{lo}-{hi - 1} (needs compression: run optmem_nap)")
-                else:
-                    out.append(f"#{lo}-{hi - 1} {s}")
-        return out
+                    missing.append((lo, hi))
+                    continue
+                lines.append(f"#{lo}-{hi - 1} {s}")
+        pending = self.pending_naps()
+        nap = self.nap_prompt(pending[0][0], pending[0][1]) if pending else None
+        # A missing cover block that is NOT pending cannot be fixed by the next
+        # nap: its tree file still holds a record (so ``_pending`` thinks it is
+        # built) but the record is unreadable — a corrupted summary. The caller
+        # must be told to forget/rebuild it, not to "do the compression below".
+        pending_set = set(pending)
+        rebuild = [(lo, hi) for lo, hi in missing if (lo, hi) not in pending_set]
+        return {
+            "lines": lines,
+            "complete": not missing,
+            "missing": missing,
+            "pending": pending,
+            "nap": nap,
+            "rebuild": rebuild,
+            "budget": budget,
+        }
+
+    def wake_lines(self, budget: int | None = None) -> list[str]:
+        """The rendered digest lines, refusing an incomplete document.
+
+        Raises ``WakeNeedsCompression`` when a required summary is missing
+        (upstream ``memo wake`` exits 1 rather than print a digest with a hole).
+        Callers that must stay non-fatal — the Hermes prefetch — use ``wake``.
+        """
+        result = self.wake(budget)
+        if not result["complete"]:
+            raise WakeNeedsCompression(result)
+        return result["lines"]
 
     # -- naps (compression) -------------------------------------------------
 
@@ -404,7 +493,10 @@ class OptMemEngine:
         left = len(self.pending_naps()) - 1
         tail = "" if left <= 0 else f"\n{left} compressions remain"
         return (
-            f"Compress memories #{lo}-{hi - 1} into one line of at most {ENTRY_CHARS} bytes.\n"
+            f"Compress memories #{lo}-{hi - 1} into one line of at most "
+            f"{ENTRY_CHARS} UTF-8 bytes (not characters).\n"
+            "Aim well below the limit. After a size error, rewrite substantially shorter; "
+            "do not retry with only small edits.\n"
             "Keep what has lasting effect, drop what does not. Invent nothing.\n\n"
             f"{body}{tail}\n"
         )
@@ -434,26 +526,89 @@ class OptMemEngine:
         return (lo, hi), self.nap_prompt(lo, hi)
 
     def apply_nap(self, lo: int, hi: int, summary: str) -> bool:
-        """Store a compression. Returns False if block order changed meanwhile."""
+        """Store a compression. True only when a summary was written."""
+        return self.apply_nap_status(lo, hi, summary) == "compressed"
+
+    def apply_nap_status(self, lo: int, hi: int, summary: str) -> str:
+        """Validate and store a compression; report what actually happened.
+
+        Returns ``"compressed"`` when a summary was written, ``"already_settled"``
+        when the block already has one (nothing written) and
+        ``"race"``/``"nothing_pending"`` when the writable slot changed under us
+        (nothing written). Raises ``ValueError`` for an empty/oversized summary,
+        a malformed block id, a block whose range exceeds the log, or a block
+        that is not the next one due.
+
+        Every check runs INSIDE the store lock, so a parallel writer cannot slip
+        a block in between validation and the append (mirrors upstream
+        ``memo nap``: a block that is not the next one is a "Wrong block").
+        """
         summary = summary.strip()
         if not summary:
             raise ValueError("empty summary")
-        if len(summary.encode("utf-8")) > ENTRY_CHARS:
-            raise ValueError(f"summary too long: max {ENTRY_CHARS} bytes")
-        return self._tree_put(lo, hi, summary)
-
-    def forget(self, lo: int, hi: int) -> None:
-        """Drop a summary and everything built on top of it; log untouched."""
+        nbytes = len(summary.encode("utf-8"))
+        if nbytes > ENTRY_CHARS:
+            raise ValueError(
+                f"summary too long: {nbytes} UTF-8 bytes, max {ENTRY_CHARS} bytes; "
+                f"reduce by at least {nbytes - ENTRY_CHARS} bytes. "
+                "Rewrite substantially shorter; do not truncate important facts."
+            )
+        err = validate_block(lo, hi)
+        if err:
+            raise ValueError(err)
         size = hi - lo
+        p = self._tree_path(size)
         with self._lock():
-            while size <= self.log_len():
+            self._repair(p, TREE_REC)
+            total = self.log_len()
+            if hi > total:
+                raise ValueError(
+                    f"block {lo}-{hi - 1} is beyond the log: it holds {total} "
+                    f"{'memory' if total == 1 else 'memories'}, so this range "
+                    "exceeds what exists."
+                )
+            if self._tree_get(lo, hi) is not None:
+                return "already_settled"
+            todo = self.pending_naps(limit=1)
+            if not todo:
+                return "nothing_pending"
+            if (lo, hi) != todo[0]:
+                raise ValueError(
+                    f"wrong block {lo}-{hi - 1}: blocks are built in order; "
+                    f"the next is {todo[0][0]}-{todo[0][1] - 1}."
+                )
+            if self._count(p, TREE_REC) != lo // size:
+                return "race"
+            with open(p, "ab") as f:
+                f.write(_pad(summary, TREE_REC))
+                f.flush()
+                os.fsync(f.fileno())
+        return "compressed"
+
+    def forget(self, lo: int, hi: int) -> list[tuple[int, int]]:
+        """Drop block ``[lo, hi)`` and every block built on it; LOG untouched.
+
+        Returns the blocks actually dropped (empty when there was no summary
+        there) so the caller can report a truthful not-found instead of a false
+        success. Mirrors upstream ``memo forget`` / ``tree_drop``.
+        """
+        err = validate_block(lo, hi)
+        if err:
+            raise ValueError(err)
+        gone: list[tuple[int, int]] = []
+        with self._lock():
+            total = self.log_len()
+            size = hi - lo
+            while size <= total:
                 p = self._tree_path(size)
                 k = lo // size
                 n = self._count(p, TREE_REC)
                 if n > k:
+                    gone += [(i * size, (i + 1) * size) for i in range(k, n)]
                     with open(p, "r+b") as f:
                         f.truncate(k * TREE_REC)
                 size *= 2
+        return gone
 
     # -- search (BM25 + regex) ----------------------------------------------
 
@@ -542,8 +697,56 @@ class OptMemEngine:
             return self._recall_bm25(query, topk, use_index)
         return self._recall_regex(query, topk)
 
+    def recall_meta(self, query: str, topk: int = 0, mode: str = "regex",
+                    use_index: bool = True) -> dict:
+        """Recall plus truthful counts for the caller's response.
+
+        Returns ``{"results", "total", "truncated", "mode_used"}``. For ``regex``
+        the ``total`` is every matching record and the returned list is the
+        newest matches that fit the reading budget (``PART_CHARS``) and, when
+        given, ``topk`` — so a vague pattern is never silently cut to five.
+        ``truncated`` is True when matches were dropped by either cap. Semantic
+        modes keep their ranked ``topk`` (0 = all ranked hits).
+        """
+        if not self.log_len():
+            return {"results": [], "total": 0, "truncated": False, "mode_used": mode}
+        resolved = self.plan_recall(query, mode)
+        if resolved == "regex":
+            results, total = self._recall_regex_page(query)
+            returned = results[:topk] if topk else results
+            return {
+                "results": returned,
+                "total": total,
+                "truncated": len(returned) < total,
+                "mode_used": resolved,
+            }
+        if resolved == "token":
+            results = self._recall_token(query, topk)
+            full = len(results) if not topk else len(self._recall_token(query, 0))
+        else:
+            results = self._recall_bm25(query, topk, use_index)
+            full = len(results) if not topk else len(self._recall_bm25(query, 0, use_index))
+        return {
+            "results": results,
+            "total": full,
+            "truncated": full > len(results),
+            "mode_used": resolved,
+        }
+
     def _recall_regex(self, query: str, topk: int = 5) -> list[tuple[float, int, str, str]]:
         """`memo recall` parity: case-insensitive regex, newest matches first."""
+        out, _hits = self._recall_regex_page(query)
+        return out[:topk] if topk else out
+
+    def _recall_regex_page(
+        self, query: str
+    ) -> tuple[list[tuple[float, int, str, str]], int]:
+        """The newest regex matches that fit ``PART_CHARS``, plus the total hits.
+
+        ``total`` is every matching record; the list is capped by the reading
+        budget exactly as upstream ``memo recall`` caps it (a vague regex
+        matches the whole log, which does not fit a harness's output).
+        """
         pat = re.compile(query, re.I)
         part_chars = self.read_config().get("PART_CHARS", 20000)
         hits, out, size = 0, [], 0
@@ -558,7 +761,7 @@ class OptMemEngine:
                 old = out.pop(0)
                 size -= len(f"#{old[1]} {old[2]} {old[3]}".encode()) + 1
         out.reverse()  # newest-first, matching memo's "Newest N of M" output
-        return out[:topk] if topk else out
+        return out, hits
 
     def _recall_token(self, query: str, topk: int = 5) -> list[tuple[float, int, str, str]]:
         """Natural-language retrieval: BM25 ranking plus a literal fallback.
@@ -591,7 +794,14 @@ class OptMemEngine:
 
     def _recall_bm25(self, query: str, topk: int = 5,
                      use_index: bool = True) -> list[tuple[float, int, str, str]]:
-        """Accent-normalized BM25 (optional, non-default)."""
+        """Accent-normalized BM25 (optional, non-default).
+
+        ``topk`` follows the same convention as every other recall helper:
+        ``0`` (or any falsy value) means UNLIMITED — return the whole ranked
+        list. ``recall_meta`` relies on this to count the full ranked set when
+        the caller asked for a bounded ``topk``; a bare ``scored[:0]`` would
+        silently report ``total_matches=0`` for a non-empty result.
+        """
         if use_index and self._index_stale():
             self.build_index()
         docs = self._index_docs if use_index else self._all_records()
@@ -626,7 +836,7 @@ class OptMemEngine:
             if score > 0:
                 scored.append((score, mid, date, text))
         scored.sort(reverse=True)
-        return scored[:topk]
+        return scored[:topk] if topk else scored
 
     # -- config / init / import (mirror memo config | init | import) --------
 
@@ -637,6 +847,13 @@ class OptMemEngine:
         "PART_CHARS": (20000, "output paging: largest part, in bytes"),
         "PART_LINES": (500, "output paging: largest part, in lines"),
     }
+
+    # Only these knobs are read by the engine at runtime (``wake`` honours
+    # ``WAKE_LINES``; regex recall honours ``PART_CHARS``). The others are
+    # memo-parity display values: they are shown and preserved for compatibility
+    # but have NO runtime effect, so a change to one must be rejected before any
+    # write instead of persisted as a silent no-op.
+    SETTABLE_KNOBS = ("WAKE_LINES", "PART_CHARS")
 
     def read_config(self) -> dict[str, int]:
         """Read the per-store `config` file (mirrors memo's `config`)."""

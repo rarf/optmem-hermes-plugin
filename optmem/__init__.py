@@ -43,7 +43,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 
 # Hermes-only dependencies. The plugin must import cleanly in a bare CI
@@ -86,7 +86,12 @@ from .config import (
     legacy_plugin_config,
     resolve_config,
 )
-from .engine import ENTRY_CHARS, RAW_MAX, WAKE_LINES, OptMemEngine
+from .engine import (
+    ENTRY_CHARS,
+    WAKE_LINES,
+    OptMemEngine,
+    validate_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +157,8 @@ NOTE_SCHEMA = {
     "description": (
         "Record one durable memory line to the OptMem append-only log "
         "(family facts, decisions, events of lasting effect). One line, "
-        "max 280 chars. If a compression is due, do it (optmem_nap) before "
+        f"max {ENTRY_CHARS} UTF-8 bytes (not characters). If a compression is due, "
+        "do it (optmem_nap) before "
         "your next action. Use for things worth remembering forever — not "
         "ephemeral chat."
     ),
@@ -161,7 +167,7 @@ NOTE_SCHEMA = {
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The memory, one line (<=280 chars).",
+                "description": f"The memory, one line, at most {ENTRY_CHARS} UTF-8 bytes.",
             },
         },
         "required": ["text"],
@@ -186,7 +192,14 @@ RECALL_SCHEMA = {
                 "type": "string",
                 "description": "Search query (a sentence or a regex pattern).",
             },
-            "topk": {"type": "integer", "description": "Max results (default 5)."},
+            "topk": {
+                "type": "integer",
+                "description": (
+                    "Max results. In regex mode every match within the reading "
+                    "budget is returned unless you set topk; the semantic modes "
+                    "default to 5. The response reports total_matches/truncated."
+                ),
+            },
             "mode": {
                 "type": "string",
                 "enum": ["auto", "regex", "bm25"],
@@ -205,9 +218,11 @@ NAP_SCHEMA = {
     "name": "optmem_nap",
     "description": (
         "Apply a compression the provider asked for. Call optmem_nap with "
-        "the block id and a one-line summary (<=280 chars) that keeps what "
+        f"the block id and a one-line summary (at most {ENTRY_CHARS} UTF-8 bytes, "
+        "not characters) that keeps what "
         "has lasting effect and drops the rest. Invent nothing. Mirrors "
-        "Taelin's 'nap, don't sleep'."
+        "Taelin's 'nap, don't sleep'. Aim well below the byte limit; after a size "
+        "error, rewrite substantially shorter rather than retrying small edits."
     ),
     "parameters": {
         "type": "object",
@@ -217,7 +232,10 @@ NAP_SCHEMA = {
                 "type": "integer",
                 "description": "Block end id (EXCLUSIVE). A displayed #8-9 block uses hi=10.",
             },
-            "summary": {"type": "string", "description": "One-line compression."},
+            "summary": {
+                "type": "string",
+                "description": f"One-line compression, at most {ENTRY_CHARS} UTF-8 bytes.",
+            },
         },
         "required": ["lo", "hi", "summary"],
     },
@@ -441,16 +459,20 @@ class OptMemProvider(MemoryProvider):
             "summary_compression_lossy": True,
             "forget_scope": "summaries only — raw records remain unchanged, not erased",
             # The store, retrieval and the DEFAULT compaction are local: no
-            # credentials, no network. LLM summaries are OPT-IN (`llm_summary`) and,
-            # when enabled and a host facade is reachable, send pending decay-block
-            # lines to the user's configured model provider through the host's
-            # PluginLlm (native auxiliary task `optmem_summary`). See the README's
+            # credentials, no network. LLM summaries are OPT-IN (`llm_summary`)
+            # AND only take effect with `auto_nap` on: they select the summarizer
+            # for the auto path (not a standalone activation). Only when BOTH are
+            # true and a host facade is reachable do pending decay-block lines go
+            # to the user's configured model provider through the host's PluginLlm
+            # (native auxiliary task `optmem_summary`). See the README's
             # "LLM summaries" and privacy notes.
             "local_only": True,
             "llm_summary": {
                 "default": "off",
-                "transmission": "opt-in — sends pending decay-block lines to the user's "
-                "configured model provider via the host PluginLlm",
+                "requires": "auto_nap",
+                "transmission": "opt-in, and only with auto_nap on — sends pending "
+                "decay-block lines to the user's configured model provider via the "
+                "host PluginLlm",
                 "task": SUMMARY_AUX_TASK,
             },
         }
@@ -460,11 +482,32 @@ class OptMemProvider(MemoryProvider):
         return session_id or self._session_id or ""
 
     def _wake_budget(self) -> int:
-        """Context lines printed by a wake (a reading budget, not a storage cap)."""
+        """Context lines printed by a wake (a reading budget, not a storage cap).
+
+        Precedence: the per-store ``config`` ``WAKE_LINES`` (memo parity, set by
+        ``optmem_config``) wins when explicitly set; otherwise the declared
+        ``wake_budget``; otherwise the memo default (96). Both the explicit
+        ``optmem_wake`` tool and the automatic ``prefetch`` resolve through here,
+        so the two never disagree.
+        """
+        if self._engine is not None:
+            store = self._engine.read_config().get("WAKE_LINES")
+            if isinstance(store, int) and store > 0:
+                return store
         try:
             return int(self._config.wake_budget)
         except (TypeError, ValueError, AttributeError):
             return WAKE_LINES
+
+    def _wake_budget_source(self) -> str:
+        """Where the effective wake budget comes from: store | declared | default."""
+        if self._engine is not None:
+            store = self._engine.read_config().get("WAKE_LINES")
+            if isinstance(store, int) and store > 0:
+                return "store"
+        if "wake_budget" in self._config.raw:
+            return "declared"
+        return "default"
 
     def on_session_switch(
         self,
@@ -515,11 +558,35 @@ class OptMemProvider(MemoryProvider):
             # second conversation in the same process still gets its context.
             key = self._session_key(session_id)
             if key != self._woke_key:
-                wake = self._engine.wake_lines(budget=self._wake_budget())
-                if wake:
+                # `wake` (not `wake_lines`) so an incomplete digest never raises
+                # into the host: the raw lines we have are shown AND the missing
+                # blocks are flagged for the nap below.
+                result = self._engine.wake(budget=self._wake_budget())
+                if result["lines"]:
                     lines.append(
-                        "## OptMem context (permanent, decay-compressed)\n" + "\n".join(wake)
+                        "## OptMem context (permanent, decay-compressed)\n"
+                        + "\n".join(result["lines"])
                     )
+                if not result["complete"]:
+                    blocks = ", ".join(f"#{lo}-{hi - 1}" for lo, hi in result["missing"])
+                    if result["nap"]:
+                        lines.append(
+                            "[OptMem] The memory context is incomplete: it needs "
+                            f"{blocks} compressed before the digest is whole. Do the "
+                            "compression below, then the next wake is complete."
+                        )
+                    rebuild = ", ".join(f"#{lo}-{hi - 1}" for lo, hi in result["rebuild"])
+                    if rebuild:
+                        # No nap is pending for these: the summary is corrupt.
+                        # Give a real fix (forget + rebuild), not a nap that is
+                        # not there.
+                        lines.append(
+                            "[OptMem] The memory context is incomplete: the summary "
+                            f"for {rebuild} is missing or corrupt while its records "
+                            "remain in the log, and no compression is pending for it. "
+                            "Run optmem_forget with that block id to drop the stale "
+                            "summary so a nap can rebuild it, or optmem_zoom to inspect."
+                        )
                 self._woke_key = key
             # Pending nap is always shown (mandatory pressure, like the CLI).
             nap = self._engine.next_nap()
@@ -661,21 +728,40 @@ class OptMemProvider(MemoryProvider):
     def _handle_recall(self, args: dict) -> str:
         try:
             query = args["query"]
-            topk = int(args.get("topk", 5))
+            explicit_topk = args.get("topk") is not None
             requested = args.get("mode") or (
                 "bm25" if bool(args.get("bm25", False)) else self._config.recall_mode
             )
             # plan_recall validates the mode and raises an actionable error for an
             # explicitly-requested invalid regex (instead of a bare re.error).
             mode_used = self._engine.plan_recall(query, requested)
-            hits = self._engine.recall(query, topk=topk, mode=requested)
-            if not hits:
-                return _json({"results": [], "count": 0, "mode_used": mode_used})
+            if explicit_topk:
+                topk = int(args["topk"])
+            elif mode_used == "regex":
+                # `memo` parity: every match within the reading budget, not a
+                # silent top-5. A cap that does bite is reported as truncated.
+                topk = 0
+            else:
+                topk = 5  # semantic modes stay ranked to a small, bounded list
+            meta = self._engine.recall_meta(query, topk=topk, mode=requested)
+            hits = meta["results"]
             results = [
                 {"score": round(s, 2), "id": mid, "date": date, "text": text}
                 for s, mid, date, text in hits
             ]
-            return _json({"results": results, "count": len(results), "mode_used": mode_used})
+            out: dict[str, Any] = {
+                "results": results,
+                "count": len(results),
+                "mode_used": mode_used,
+                "total_matches": meta["total"],
+                "truncated": meta["truncated"],
+            }
+            if meta["truncated"]:
+                out["note"] = (
+                    f"Showing the newest {len(results)} of {meta['total']} matches "
+                    "(reading budget). Narrow the query or pass topk."
+                )
+            return _json(out)
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
         except Exception as exc:
@@ -696,14 +782,31 @@ class OptMemProvider(MemoryProvider):
                     hi = legacy_hi
                 else:
                     return tool_error(self._validate_block(lo, hi))
-            ok = self._engine.apply_nap(lo, hi, summary)
-            if not ok:
-                return tool_error(
-                    f"no writable summary slot for #{lo}-{hi - 1} "
-                    f"(hi={hi} exclusive); refresh optmem_wake because another "
-                    "nap may have settled or forgotten it."
+            status = self._engine.apply_nap_status(lo, hi, summary)
+            if status == "compressed":
+                return _json(
+                    {"status": "compressed", "block": f"{lo}-{hi - 1}", "hi_exclusive": hi}
                 )
-            return _json({"status": "compressed", "block": f"{lo}-{hi - 1}", "hi_exclusive": hi})
+            if status == "already_settled":
+                return _json(
+                    {
+                        "status": "already_settled",
+                        "block": f"{lo}-{hi - 1}",
+                        "hi_exclusive": hi,
+                        "note": "This block already has a summary; nothing was written.",
+                    }
+                )
+            return _json(
+                {
+                    "status": status,
+                    "block": f"{lo}-{hi - 1}",
+                    "hi_exclusive": hi,
+                    "note": (
+                        "No writable summary slot for this block; refresh optmem_wake "
+                        "because another nap may have settled or forgotten it."
+                    ),
+                }
+            )
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
         except Exception as exc:
@@ -711,20 +814,55 @@ class OptMemProvider(MemoryProvider):
 
     def _handle_wake(self, args: dict) -> str:
         try:
-            lines = self._engine.wake_lines()
-            if not lines:
-                return _json({"context": [], "note": "OptMem empty."})
-            return _json({"context": lines, "count": len(lines)})
+            result = self._engine.wake(budget=self._wake_budget())
+            if not result["complete"]:
+                # Upstream `memo wake` refuses ("Cannot wake") while a needed
+                # summary is uncompressed. Surface the same truth plus an
+                # ACTIONABLE next step: a pending nap when one exists, otherwise
+                # a forget/rebuild diagnostic (never a nap that is not there).
+                missing = [f"{lo}-{hi - 1}" for lo, hi in result["missing"]]
+                rebuild = [f"{lo}-{hi - 1}" for lo, hi in result["rebuild"]]
+                notes: list[str] = []
+                if result["nap"]:
+                    notes.append(
+                        "the memory context needs the missing blocks compressed "
+                        "first. Do the compression below, then run optmem_wake again."
+                    )
+                if rebuild:
+                    joined = ", ".join(rebuild)
+                    notes.append(
+                        f"the summary for {joined} is missing or corrupt while its "
+                        "records remain in the log, and no compression is pending "
+                        "for it. Run optmem_forget with that block id to drop the "
+                        "stale summary so a nap can rebuild it, or optmem_zoom to "
+                        "inspect. Nothing runs automatically."
+                    )
+                out: dict[str, Any] = {
+                    "context": result["lines"],
+                    "count": len(result["lines"]),
+                    "complete": False,
+                    "needs_compression": True,
+                    "missing_blocks": missing,
+                    "note": "Cannot wake: " + " ".join(notes),
+                }
+                if result["nap"]:
+                    out["nap_prompt"] = result["nap"]
+                if rebuild:
+                    out["rebuild_blocks"] = rebuild
+                    out["action"] = "forget_then_nap"
+                return _json(out)
+            if not result["lines"]:
+                return _json({"context": [], "note": "OptMem empty.", "complete": True})
+            return _json(
+                {"context": result["lines"], "count": len(result["lines"]), "complete": True}
+            )
         except Exception as exc:
             return tool_error(str(exc))
 
     def _validate_block(self, lo: int, hi: int) -> str | None:
         """Return an error string if (lo,hi) is not a valid aligned power-of-two
         block id (mirrors memo's block_id check). hi is EXCLUSIVE."""
-        n = hi - lo
-        if n < 2 or (n & (n - 1)) or (lo % n):
-            return f"{lo}-{hi - 1} is not a block. Copy the id printed by optmem_wake, like 16-31."
-        return None
+        return validate_block(lo, hi)
 
     def _handle_zoom(self, args: dict) -> str:
         try:
@@ -733,18 +871,29 @@ class OptMemProvider(MemoryProvider):
             err = self._validate_block(lo, hi)
             if err:
                 return tool_error(err)
-            size = hi - lo
-            if size <= RAW_MAX:
-                body = self._engine._log_slice(lo, hi)
-                out = [f"#{e[0]} {e[1]} {e[2]}" for e in body]
-            else:
-                mid = (lo + hi) // 2
-                out = []
-                for a, b in ((lo, mid), (mid, hi)):
+            total = self._engine.log_len()
+            if lo >= total:
+                # Upstream `memo zoom` refuses a range beyond the memory.
+                return tool_error(
+                    f"#{lo}-{hi - 1} is beyond the memory: it holds {total} "
+                    f"{'memory' if total == 1 else 'memories'}. Run optmem_wake."
+                )
+            # Always open the node into its TWO halves (mirrors `memo zoom`): a
+            # half that is a single record is shown verbatim; a larger half is
+            # its summary (or "not compressed yet"). Never flatten to raw lines.
+            mid = (lo + hi) // 2
+            out: list[str] = []
+            for a, b in ((lo, mid), (mid, hi)):
+                if a >= total:
+                    continue  # the future: no memories there yet
+                if b - a == 1:
+                    rec = self._engine._log_slice(a, b)
+                    if rec:
+                        e = rec[0]
+                        out.append(f"#{e[0]} {e[1]} {e[2]}")
+                else:
                     s = self._engine._tree_get(a, b)
-                    if s is None:
-                        s = "(missing - rebuild via optmem_nap)"
-                    out.append(f"#{a}-{b - 1} {s}")
+                    out.append(f"#{a}-{b - 1} {s if s else 'not compressed yet'}")
             return _json({"block": f"{lo}-{hi - 1}", "halves": out})
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
@@ -758,8 +907,19 @@ class OptMemProvider(MemoryProvider):
             err = self._validate_block(lo, hi)
             if err:
                 return tool_error(err)
-            self._engine.forget(lo, hi)
-            return _json({"status": "forgotten", "block": f"{lo}-{hi - 1}"})
+            gone = self._engine.forget(lo, hi)
+            if not gone:
+                # Upstream `memo forget` dies "No summary at X." — report the
+                # same truth instead of a false success with no mutation.
+                return tool_error(f"No summary at {lo}-{hi - 1}; nothing to forget.")
+            return _json(
+                {
+                    "status": "forgotten",
+                    "block": f"{lo}-{hi - 1}",
+                    "dropped": [f"{a}-{b - 1}" for a, b in gone],
+                    "count": len(gone),
+                }
+            )
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
         except Exception as exc:
@@ -769,20 +929,68 @@ class OptMemProvider(MemoryProvider):
         try:
             changes = args.get("changes") or []
             over = self._engine.read_config()
+            # Phase 1 — validate EVERY change before touching the file. A single
+            # rejected/unsupported entry (even in a mixed update) must leave the
+            # store exactly as it was: no partial write, no persisted no-op.
+            planned: dict[str, int] = {}
             for c in changes:
                 k, eq, v = str(c).partition("=")
                 k = k.strip().upper()
                 if not eq or k not in self._engine.KNOBS:
                     allowed = ", ".join(self._engine.KNOBS)
                     return tool_error(f"invalid knob {c!r}; allowed: {allowed}")
-                over[k] = int(v.strip())
-            if changes:
+                if k not in self._engine.SETTABLE_KNOBS:
+                    settable = ", ".join(self._engine.SETTABLE_KNOBS)
+                    return tool_error(
+                        f"{k} is an unsupported setting: it is a read-only "
+                        "memo-parity display value with no runtime effect, so it "
+                        "cannot be changed. Nothing was written. Settable knobs: "
+                        f"{settable}."
+                    )
+                try:
+                    value = int(v.strip())
+                except ValueError:
+                    return tool_error(f"invalid value for {k}: {v!r} is not an integer")
+                if value < 1:
+                    return tool_error(f"invalid value for {k}: must be a positive integer")
+                planned[k] = value
+            # Phase 2 — apply, then read back. A knob the engine does not
+            # actually persist must never be reported as a successful change.
+            if planned:
+                over.update(planned)
                 self._engine.write_config(over)
+                persisted = self._engine.read_config()
+                for k, value in planned.items():
+                    if persisted.get(k) != value:
+                        return tool_error(
+                            f"{k} was not persisted (found {persisted.get(k)!r}); "
+                            "the config file is unchanged."
+                        )
             rows = []
             for k, (default, what) in self._engine.KNOBS.items():
                 cur = over.get(k, default)
-                rows.append({"name": k, "value": cur, "default": default, "what": what})
-            return _json({"config": rows, "changed": bool(changes)})
+                rows.append(
+                    {
+                        "name": k,
+                        "value": cur,
+                        "default": default,
+                        "what": what,
+                        # Read-only legacy knobs are displayed truthfully but can
+                        # never be changed (see SETTABLE_KNOBS).
+                        "settable": k in self._engine.SETTABLE_KNOBS,
+                    }
+                )
+            return _json(
+                {
+                    "config": rows,
+                    "changed": bool(planned),
+                    # WAKE_LINES now governs both optmem_wake and the automatic
+                    # prefetch; report the effective budget so a change is
+                    # verifiable, never an unobservable "success".
+                    "effective_wake_budget": self._wake_budget(),
+                    "wake_budget_source": self._wake_budget_source(),
+                }
+            )
         except (KeyError, ValueError) as exc:
             return tool_error(str(exc))
         except Exception as exc:

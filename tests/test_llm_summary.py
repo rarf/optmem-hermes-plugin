@@ -64,7 +64,11 @@ class _AuxRecordingCtx:
 
 def _provider(tmp_path, *, facade=None, **config):
     mem_dir = tmp_path / "optmem_memory"
-    provider = OptMemProvider(config={"memory_dir": str(mem_dir), **config}, llm_facade=facade)
+    # This file exercises the auto-nap summarizer. Compaction is opt-in.
+    provider = OptMemProvider(
+        config={"memory_dir": str(mem_dir), "auto_nap": True, **config},
+        llm_facade=facade,
+    )
     provider.initialize("test-session", hermes_home=str(tmp_path))
     return provider
 
