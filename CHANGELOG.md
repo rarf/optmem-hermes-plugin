@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `optmem_import` (model tool) now only reads regular files inside
+  `<HERMES_HOME>/optmem/imports/` (symlinks resolved, 4 MiB cap). Import
+  errors no longer echo the offending line's content. The `import` CLI
+  command still accepts any path.
+- `mode` switches now write `memory.provider: optmem-hermes` instead of the
+  unregistered name `optmem`.
+
 ## [0.3.2] - 2026-10-01
 
 ### Changed

@@ -291,14 +291,31 @@ class TestOptMemProviderLifecycle:
 
     def test_import_lines_from_file(self, tmp_path):
         p = _make_provider(tmp_path)
-        import_file = tmp_path / "bootstrap.txt"
+        import_file = tmp_path / "optmem" / "imports" / "bootstrap.txt"
+        import_file.parent.mkdir(parents=True)
         import_file.write_text(
             "2026-01-01 facto A duravel\n2026-02-01 facto B duravel\n",
             encoding="utf-8",
         )
-        res = json.loads(p.handle_tool_call("optmem_import", {"file": str(import_file)}))
+        res = json.loads(p.handle_tool_call("optmem_import", {"file": "bootstrap.txt"}))
         assert res["status"] == "imported"
         assert res["count"] == 2
+
+    def test_import_tool_refuses_paths_outside_imports_dir(self, tmp_path):
+        p = _make_provider(tmp_path)
+        secret = tmp_path / "creds.txt"
+        secret.write_text("https://user:TOPSECRET@example.com\n", encoding="utf-8")
+        (tmp_path / "optmem" / "imports").mkdir(parents=True)
+        for path in (str(secret), "../../creds.txt"):
+            res = json.loads(p.handle_tool_call("optmem_import", {"file": path}))
+            assert "error" in res
+            assert "TOPSECRET" not in json.dumps(res)
+        # A file inside the imports dir with a bad line is rejected without echoing it.
+        bad = tmp_path / "optmem" / "imports" / "bad.txt"
+        bad.write_text("not-a-date TOPSECRET\n", encoding="utf-8")
+        res = json.loads(p.handle_tool_call("optmem_import", {"file": "bad.txt"}))
+        assert "error" in res and "TOPSECRET" not in json.dumps(res)
+        assert p._engine.log_len() == 0
 
     def test_block_lines_returns_raw_lines(self, tmp_path):
         p = _make_provider(tmp_path)

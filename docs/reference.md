@@ -234,7 +234,7 @@ diagnostic.
 | `optmem_zoom` | Walk the decay tree back down to raw records. |
 | `optmem_forget` | Drop a summary so the next nap rebuilds it (raw records stay). |
 | `optmem_config` | Show or change size knobs. |
-| `optmem_import` | Bulk-load historical `YYYY-MM-DD <text>` memories. |
+| `optmem_import` | Bulk-load historical `YYYY-MM-DD <text>` memories from a file in `<HERMES_HOME>/optmem/imports/` (use the `import` CLI command for other paths). |
 | `optmem_init` | Create the store deliberately. |
 
 ### Recall modes

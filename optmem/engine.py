@@ -915,7 +915,7 @@ class OptMemEngine:
                 continue
             date, _, text = line.partition(" ")
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-                raise ValueError(f"line {i}: expected 'YYYY-MM-DD <text>', got: {line}")
+                raise ValueError(f"line {i}: expected 'YYYY-MM-DD <text>'")
             try:
                 datetime.datetime.strptime(date, "%Y-%m-%d")
             except ValueError as err:

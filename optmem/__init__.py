@@ -303,6 +303,8 @@ CONFIG_SCHEMA = {
     },
 }
 
+_IMPORT_MAX_BYTES = 4 * 1024 * 1024
+
 IMPORT_SCHEMA = {
     "name": "optmem_import",
     "description": (
@@ -312,7 +314,14 @@ IMPORT_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "file": {"type": "string", "description": "Path to the import file."},
+            "file": {
+                "type": "string",
+                "description": (
+                    "Import file name inside <HERMES_HOME>/optmem/imports/. Paths "
+                    "outside that directory are refused; the user can import any "
+                    "file with `hermes optmem-hermes import <file>`."
+                ),
+            },
         },
         "required": ["file"],
     },
@@ -998,7 +1007,24 @@ class OptMemProvider(MemoryProvider):
 
     def _handle_import(self, args: dict) -> str:
         try:
-            path = args["file"]
+            # Model-reachable: confine reads to <HERMES_HOME>/optmem/imports/ so
+            # a prompt-injected path cannot pull credential files (or block on a
+            # FIFO/device). Symlinks are resolved before the containment check.
+            import os
+
+            home = getattr(self, "_hermes_home", None) or _get_hermes_home()
+            imports_dir = os.path.realpath(os.path.join(home, "optmem", "imports"))
+            requested = str(args["file"])
+            path = os.path.realpath(os.path.join(imports_dir, requested))
+            if os.path.commonpath([path, imports_dir]) != imports_dir:
+                return tool_error(
+                    f"optmem_import only reads files inside {imports_dir}; "
+                    "use `hermes optmem-hermes import <file>` for other paths"
+                )
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"no import file named {requested!r} in {imports_dir}")
+            if os.path.getsize(path) > _IMPORT_MAX_BYTES:
+                return tool_error(f"import file exceeds {_IMPORT_MAX_BYTES} bytes")
             with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
             added = self._engine.import_lines(lines)

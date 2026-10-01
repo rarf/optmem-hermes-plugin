@@ -778,7 +778,7 @@ def apply_mode_switch(
     state_path = _mode_state_path(home)
     state_before = state_path.read_bytes() if state_path.exists() else None
     try:
-        update_memory_config(home, {**updates, "provider": "optmem"})
+        update_memory_config(home, {**updates, "provider": "optmem-hermes"})
         write_declared_config(home, {"mode": report["mode"]})
         state_payload = (
             json.dumps(
