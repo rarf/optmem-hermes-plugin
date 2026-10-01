@@ -9,10 +9,10 @@ Store durable facts, search them with regex/BM25, and zoom from summaries back t
 
 ## Install
 
-Version **0.3.1** is distributed through GitHub Releases. The plugin is **not yet in the Hermes catalog**. Install into the Python environment used by Hermes:
+Version **0.3.2** is distributed through GitHub Releases. The plugin is **not yet in the Hermes catalog**. Install into the Python environment used by Hermes:
 
 ```bash
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.1"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.2"
 ```
 
 Select the provider in your profile's `config.yaml`, then restart that profile's Hermes process:

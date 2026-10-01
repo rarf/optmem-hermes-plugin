@@ -62,7 +62,7 @@ off by default — can send pending block lines to a model you select; see
 
 ### 1. Install (from a pinned source commit)
 
-> **Install the published tag.** `v0.3.1` is the release that matches upstream
+> **Install the published tag.** `v0.3.2` is the release that matches upstream
 > compaction (manual by default). There is no PyPI artifact; install from the tag.
 >
 > **Not in the Hermes plugin catalog yet.** `hermes plugins install optmem-hermes`
@@ -70,7 +70,7 @@ off by default — can send pending block lines to a model you select; see
 > the tag below.
 
 ```bash
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.1"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.2"
 
 # ...or from a pinned source checkout
 git clone https://github.com/rarf/optmem-hermes-plugin.git

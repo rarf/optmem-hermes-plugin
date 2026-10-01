@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-01
+
+### Changed
+- Remove the standalone demo, legacy-heavy configuration example and unused
+  catalog image variants; retain the final 2:1 catalog card.
+- Shorten the READMEs while preserving migration guards, upstream attribution
+  and opt-in LLM egress/cost warnings. Add a catalog README parity test.
+- Simplify development targets and remove redundant CI compile steps; keep
+  Linux, Windows and pinned-host integration coverage.
+- Clarify that the upstream sync script checks three constants and local tests,
+  not full format or decay-algorithm equivalence.
+
+### Fixed
+- Declare the build frontend in the development extra so `make build` works.
+
+Runtime behavior, data format, defaults and legacy configuration readers are
+unchanged from 0.3.1.
+
 ## [0.3.1] - 2026-10-01
 
 ### Changed
