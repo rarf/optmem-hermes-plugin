@@ -1,8 +1,8 @@
-# Submission template, not a live catalog listing.
-# Replace this prior-source SHA with the final reviewed commit in the upstream PR.
+# Latest published release; submitted in NousResearch/hermes-agent PR #130200.
+# Update SHA, version and image together after the next release.
 name: optmem-hermes
 repo: https://github.com/rarf/optmem-hermes-plugin
-sha: 1cae50030eb9651063d9f97ed2a0b3892e189811
+sha: 125d859ddd1813930a871de2c5b3d213e3d09336
 subdir: optmem
 description: >-
   Independent Hermes integration of Victor Taelin's OptMem design: local,
@@ -19,9 +19,8 @@ tier: community
 category: memory
 docs_url: https://github.com/rarf/optmem-hermes-plugin#readme
 version: "0.3.1"
-# User-selected static diagram. Replace the URL SHA alongside the final entry pin;
-# this draft URL will not resolve until the asset has been committed and pushed.
-image: https://raw.githubusercontent.com/rarf/optmem-hermes-plugin/2f647190e2f570458d9485edfbdfea574a76bcf7/docs/assets/catalog-banner-redesign.png
+# Final 2:1 card, pinned to the same release commit.
+image: https://raw.githubusercontent.com/rarf/optmem-hermes-plugin/125d859ddd1813930a871de2c5b3d213e3d09336/docs/assets/catalog-banner-card.png
 screenshots: []
 readme: true
 platforms: [linux, windows]

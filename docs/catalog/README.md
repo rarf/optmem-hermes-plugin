@@ -1,8 +1,8 @@
 # Hermes catalog submission
 
-Status: preparation in the plugin repository, not an upstream submission.
+Status: submitted in [Hermes PR #130200](https://github.com/NousResearch/hermes-agent/pull/130200), pinned to the published `v0.3.1` release.
 
-Copy `optmem-hermes.yaml` to `plugin-catalog/optmem-hermes.yaml` on a branch based on current `NousResearch/hermes-agent:main` after the plugin corrections have merged.
+The local `optmem-hermes.yaml` records the published release used by that PR. For future releases, update the existing upstream PR rather than opening a duplicate.
 
 ## Entry and discovery
 
@@ -10,7 +10,7 @@ Copy `optmem-hermes.yaml` to `plugin-catalog/optmem-hermes.yaml` on a branch bas
 - Canonical manifest/provider/catalog name: `optmem-hermes`. Python package and existing data paths retain their names. The CLI becomes `hermes optmem-hermes`.
 - `subdir: optmem`: the catalog renders `optmem/README.md` at the reviewed pin.
 - Linux and Windows match CI coverage. Minimum Hermes version is omitted until verified.
-- The SHA in this template predates these changes: **replace it in the upstream submission with the final reviewed plugin SHA**. A file cannot contain its own commit hash; the final upstream entry is prepared after the plugin commit exists.
+- The entry tracks the latest published release, not an unmerged cleanup branch. Update the SHA, version and image pin together after publishing a new release.
 
 Proposed GitHub topics: `hermes-agent`, `hermes-plugin`, `memory-provider`, `agent-memory`, `optmem`, `local-first`, `append-only`, `bm25`, `python`.
 
@@ -18,7 +18,7 @@ The catalog has no free-form `tags` field. Category, tier and capability chips a
 
 ## Visual and attribution
 
-The original owner-supplied diagram is preserved at `docs/assets/catalog-banner.png` (1912×1058). The card uses `docs/assets/catalog-banner-card.png` (2116×1058), with white horizontal padding for an exact 2:1 ratio and no cropping of the diagram. The owner confirmed authorship and explicitly authorized public redistribution. Pin the image URL to the same final source commit as the catalog entry; the current template URL is a placeholder and does not yet resolve.
+The catalog uses `docs/assets/catalog-banner-card.png` (2116×1058), the owner-authorized diagram with white horizontal padding for an exact 2:1 ratio and no cropping. Keep only this final asset in the repository. Pin its URL to the same reviewed release commit as the catalog entry.
 
 The README starts with Victor Taelin's original animation, linked rather than copied or rehosted:
 

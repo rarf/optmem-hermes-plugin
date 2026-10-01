@@ -78,8 +78,6 @@ cd optmem-hermes-plugin
 git checkout <FULL-40-CHAR-COMMIT-SHA>
 pip install .
 
-# latest published release (0.2.0), for the previous provider
-pip install "optmem-hermes-plugin==0.2.0"
 ```
 
 ### 2. Activate it
@@ -308,21 +306,9 @@ a block is never lost and the raw `LOG.txt` records are always retained.
 The on-disk constants mirror the published upstream format: `LOG_REC = 320`,
 `TREE_REC = 288`, `RAW_MAX = 16`, one entry of at most 280 UTF-8 bytes, and
 native entries joined by `"\n§\n"`. `scripts/sync_upstream.sh` fetches upstream's
-`memo`, compares those constants, and exits non-zero when they drift — that
-script is the compatibility check. This repository's test suite does not run the
-upstream CLI.
-
----
-
-## Examples
-
-```bash
-python examples/standalone_demo.py
-```
-
-Runs the full lifecycle without Hermes (temp store, no network): `note` →
-`recall` (regex + accent-tolerant BM25) → auto-compaction (deterministic,
-LLM-free) → `wake`.
+`memo`, compares those three constants, and runs the local tests. It detects
+constant drift, not full format or decay-algorithm equivalence. This repository's
+test suite does not run the upstream CLI.
 
 ---
 
