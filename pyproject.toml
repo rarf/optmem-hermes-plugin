@@ -70,7 +70,3 @@ line-length = 100
 target-version = "py311"
 lint.select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20"]
 lint.ignore = ["S101"]  # assert used in tests
-
-# CLI demo scripts may use print freely.
-[tool.ruff.lint.per-file-ignores]
-"examples/**" = ["T201"]
