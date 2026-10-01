@@ -1,7 +1,7 @@
 # OptMem Hermes Plugin - Makefile
 # Common development tasks
 
-.PHONY: test lint fmt install dev-install clean build release check
+.PHONY: test test-cov lint fmt dev-install install build clean check test-windows help
 
 # Run tests (Linux/macOS/Windows)
 test:
@@ -22,11 +22,11 @@ fmt:
 
 # Install in editable mode with dev deps
 dev-install:
-	pip install -e .[dev]
+	python -m pip install -e '.[dev]'
 
 # Install in editable mode (production deps only)
 install:
-	pip install -e .
+	python -m pip install -e .
 
 # Build distribution packages
 build:
@@ -43,22 +43,6 @@ check: lint test
 test-windows:
 	python -m pytest tests/ -q -k "lock or windows"
 
-# Verify byte-compat with memo CLI (requires memo in PATH)
-test-byte-compat:
-	@echo "Run the retro-compat harness manually: scripts/sync_upstream.sh"
-	@echo "Then: bash /tmp/optmem_retro_test.sh"
-
 # Show help
 help:
-	@echo "Available targets:"
-	@echo "  test           - Run tests"
-	@echo "  test-cov       - Run tests with coverage"
-	@echo "  lint           - Lint with ruff"
-	@echo "  fmt            - Auto-fix lint issues"
-	@echo "  dev-install    - Install in editable mode with dev deps"
-	@echo "  install        - Install in editable mode (prod only)"
-	@echo "  build          - Build dist packages"
-	@echo "  clean          - Clean build artifacts"
-	@echo "  check          - Run lint + test (pre-commit)"
-	@echo "  test-windows   - Run Windows-specific tests"
-	@echo "  help           - Show this help"
+	@printf '%s\n' 'Targets: test test-cov lint fmt dev-install install build clean check test-windows help'
