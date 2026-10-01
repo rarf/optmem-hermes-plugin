@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "optmem-hermes-plugin"
-version = "0.3.0"
+version = "0.3.1"
 description = "OptMem local memory provider for Hermes Agent — append-only, decay-compressed, BM25 search, Hybrid/OptMem-only modes."
 readme = "README.md"
 requires-python = ">=3.11"

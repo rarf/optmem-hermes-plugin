@@ -720,6 +720,9 @@ class TestLlmSummaryHostIntegration:
         assert provider._summary_llm() is None  # incompatible bridge → no facade
 
         monkeypatch.setenv("OPTMEM_LLM_SUMMARY", "1")
+        from optmem.config import write_declared_config
+
+        write_declared_config(isolated_home, {"auto_nap": True})
         provider.initialize("s", hermes_home=str(isolated_home))
         provider.handle_tool_call("optmem_note", {"text": "cliente X aprovou orcamento Q3"})
         provider.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})
@@ -760,7 +763,7 @@ class TestLlmSummaryHostIntegration:
         assert provider._summary_llm() is real.llm  # the borrowed facade
 
         # Enable the opt-in through the declared config (the supported path).
-        write_declared_config(isolated_home, {"llm_summary": True})
+        write_declared_config(isolated_home, {"llm_summary": True, "auto_nap": True})
         provider.initialize("s", hermes_home=str(isolated_home))
         provider.handle_tool_call("optmem_note", {"text": "cliente X aprovou orcamento Q3"})
         provider.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})

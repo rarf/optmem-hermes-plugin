@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-01
+
+### Changed
+- **Manual merges by default.** `auto_nap` now defaults to off, matching upstream
+  OptMem (`memo` compacts only when asked). Background drain every ~10 turns is
+  an explicit opt-in. Installations that already set `auto_nap: true` are unchanged.
+- **`llm_summary` is not a standalone switch.** It only chooses the summarizer
+  used by the `auto_nap` path. Network egress and token cost happen only when
+  both are true.
+- **Wake refuses a hole.** A required summary that is missing makes `wake_lines`
+  raise `WakeNeedsCompression` instead of printing a digest with a gap. `wake`
+  reports `complete`, `missing` and the next nap prompt. Mirrors upstream
+  `memo wake`.
+- **Block ids are checked.** `nap`, `zoom` and `forget` reject a range that is
+  not an aligned power-of-two block, so `4-5` and `5-6` cannot read the same record.
+
+### Fixed
+- Tool descriptions state the 280-byte UTF-8 limit, not a character limit.
+
 ## [0.3.0] - 2026-09-30
 
 ### Added

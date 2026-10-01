@@ -308,7 +308,8 @@ class TestOptMemProviderLifecycle:
         assert lines == ["cliente X aprovou orcamento", "deploy em staging autorizado"]
 
     def test_on_turn_start_local_fallback_naps(self, tmp_path):
-        p = _make_provider(tmp_path)
+        p = OptMemProvider(config={"memory_dir": str(tmp_path / "optmem_memory"), "auto_nap": True})
+        p.initialize("test-session", hermes_home=str(tmp_path))
         p.handle_tool_call("optmem_note", {"text": "cliente X aprovou orcamento Q3"})
         p.handle_tool_call("optmem_note", {"text": "deploy em staging autorizado"})
         # No LLM, no _ctx → local deterministic summary must run.
@@ -330,7 +331,10 @@ class TestOptMemProviderLifecycle:
                 return types.SimpleNamespace(text="resumo llm de A e B", provider="p", model="m")
 
         mem_dir = tmp_path / "optmem_memory"
-        p = OptMemProvider(config={"memory_dir": str(mem_dir)}, llm_facade=_Facade())
+        p = OptMemProvider(
+            config={"memory_dir": str(mem_dir), "auto_nap": True},
+            llm_facade=_Facade(),
+        )
         p.initialize("test-session", hermes_home=str(tmp_path))
         p.handle_tool_call("optmem_note", {"text": "facto duravel A"})
         p.handle_tool_call("optmem_note", {"text": "facto duravel B"})
@@ -342,7 +346,8 @@ class TestOptMemProviderLifecycle:
         assert "facto duravel" in captured["messages"][-1]["content"]
 
     def test_on_turn_start_skips_ephemeral_only_block(self, tmp_path):
-        p = _make_provider(tmp_path)
+        p = OptMemProvider(config={"memory_dir": str(tmp_path / "optmem_memory"), "auto_nap": True})
+        p.initialize("test-session", hermes_home=str(tmp_path))
         # Lines with no durable keyword → local summary returns "" → skip.
         p.handle_tool_call("optmem_note", {"text": "bla bla irrelevant chat"})
         p.handle_tool_call("optmem_note", {"text": "mais bla sem sentido"})

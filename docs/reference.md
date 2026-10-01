@@ -62,18 +62,15 @@ off by default — can send pending block lines to a model you select; see
 
 ### 1. Install (from a pinned source commit)
 
-> **0.3.0 is unreleased.** There is no `v0.3.0` tag and no PyPI artifact yet, so
-> `pip install "optmem-hermes-plugin==0.3.0"` and `git clone --branch v0.3.0`
-> fail. Install the reviewed source at an exact commit instead.
+> **Install the published tag.** `v0.3.1` is the release that matches upstream
+> compaction (manual by default). There is no PyPI artifact; install from the tag.
 >
-> **Not in the Hermes plugin catalog.** OptMem has no entry in the Hermes plugin
-> catalog yet, so `hermes plugins install optmem-hermes` is not a working install path
-> today. The catalog is a reviewed, SHA-pinned listing; until this plugin has an
-> entry, use the pinned-source install below.
+> **Not in the Hermes plugin catalog yet.** `hermes plugins install optmem-hermes`
+> is not a working install path until the catalog PR is merged. Until then, use
+> the tag below.
 
 ```bash
-# from an exact reviewed commit (replace with the full 40-character SHA)
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@<FULL-40-CHAR-COMMIT-SHA>"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.1"
 
 # ...or from a pinned source checkout
 git clone https://github.com/rarf/optmem-hermes-plugin.git
@@ -255,25 +252,29 @@ diagnostic.
 
 ### Auto-compaction
 
-`on_turn_start` drains pending naps every ~10 turns with a deterministic,
-LLM-free extractive summarizer; a block with no durable signal is left raw
-rather than losing it. That extractor is lossy for detail — a summary can omit
-facts from its block, and the raw `LOG.txt` records surviving does **not** mean
-the summary kept them. `auto_nap: false` disables automatic compaction.
+Off by default, matching upstream: nothing runs in the background, and a
+compression happens when the agent runs the requested `optmem_nap`. Set
+`auto_nap: true` to let `on_turn_start` drain pending naps every ~10 turns with
+a deterministic, LLM-free extractive summarizer; a block with no durable signal
+is left raw rather than losing it. That extractor is lossy for detail — a
+summary can omit facts from its block, and the raw `LOG.txt` records surviving
+does **not** mean the summary kept them.
 
 ### LLM summaries (opt-in)
 
-Compaction is the local, LLM-free extractor unless you opt in. Enable it with
-`llm_summary: true` in the declared config (`<HERMES_HOME>/optmem/config.json`),
-the legacy `memory.optmem.llm_summary` key, or `OPTMEM_LLM_SUMMARY=1`. Default is
-`false`.
+Compaction stays on the local extractor unless you opt into **both**
+`auto_nap: true` and `llm_summary: true`. `llm_summary` alone does nothing and
+causes no egress. Enable both in the declared config
+(`<HERMES_HOME>/optmem/config.json`), or set the legacy
+`memory.optmem.llm_summary` key / `OPTMEM_LLM_SUMMARY=1` together with
+`auto_nap`. Default for each is `false`.
 
 ```jsonc
 // <HERMES_HOME>/optmem/config.json
-{ "llm_summary": true }
+{ "auto_nap": true, "llm_summary": true }
 ```
 
-When on, `on_turn_start` asks the host LLM for a one-line summary of each pending
+When both are on, `on_turn_start` asks the host LLM for a one-line summary of each pending
 decay block through the supported `agent.plugin_llm.PluginLlm` facade the host
 hands the provider, routed by the plugin-owned native auxiliary task
 **`optmem_summary`**. That task slot defaults to:

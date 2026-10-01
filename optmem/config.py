@@ -182,7 +182,7 @@ class OptMemConfig:
     recall_mode: str = "auto"
     llm_summary: bool = False
     migration_split_long: bool = False
-    auto_nap: bool = True
+    auto_nap: bool = False
     native_memory_file: str = ""
     native_user_file: str = ""
     source: str = "defaults"
@@ -309,7 +309,7 @@ def resolve_config(
         recall_mode=recall_mode,
         llm_summary=_bool("llm_summary", False),
         migration_split_long=_bool("migration_split_long", False),
-        auto_nap=_bool("auto_nap", True),
+        auto_nap=_bool("auto_nap", False),
         native_memory_file=str(native_memory_file)
         if isinstance(native_memory_file, str) and native_memory_file
         else str(_expand_home(str(native_mem), home)),

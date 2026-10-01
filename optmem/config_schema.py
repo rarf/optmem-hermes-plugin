@@ -126,7 +126,10 @@ def _opts(*pairs: tuple[str, str]) -> tuple:
 _WAKE_INFO = (
     "Lines of decayed context printed on the first turn of EACH session (default 96, "
     "the memo default). This is a reading budget, not a storage cap: it costs model "
-    "context tokens on the first turn after a session starts, /new or a compression."
+    "context tokens on the first turn after a session starts, /new or a compression. "
+    "The per-store `config` WAKE_LINES (set by `optmem_config`) is the most specific "
+    "knob and governs both optmem_wake and the automatic prefetch when set; otherwise "
+    "this value applies."
 )
 _MODE_INFO = (
     "Hybrid: OptMem runs alongside the built-in MEMORY.md/USER.md store; nothing about "
@@ -142,26 +145,33 @@ _RECALL_INFO = (
     "search."
 )
 _NAP_INFO = (
-    "Deterministic, LLM-free auto-compaction every ~10 turns: pending decay blocks are "
-    "merged with an extractive summary (zero token cost, works offline). A block with no "
-    "durable signal is left raw rather than losing data."
+    "Off by default: manual merges only, nothing runs in the background. When you opt "
+    "in, `on_turn_start` drains pending decay blocks every ~10 turns with a "
+    "deterministic, LLM-free extractive summary (zero token cost, works offline). A "
+    "block with no durable signal is left raw rather than losing data. Mirrors "
+    "upstream, where compression happens only in `note`'s output."
 )
 _LLM_INFO = (
-    "Off by default. When on AND the host exposes its supported PluginLlm facade, "
-    "pending decay blocks are summarized by the host LLM through that facade, "
-    "routed by the plugin-owned native auxiliary task `optmem_summary`. The task "
-    "slot defaults to provider `auto` / model `''` (the host's configured model); "
-    "set provider/model/timeout under `auxiliary.optmem_summary` or pick the "
-    "`OptMem summaries` task in `hermes model`. The host owns auth, routing and "
-    "fallback — the plugin supplies no keys. When the facade is unavailable (a "
-    "host that does not hand it to memory providers, or a version-dependent "
-    "private bridge that fails closed) or the reply is an error, empty, "
-    "multi-line or oversized, the local LLM-free extractor runs instead, so a "
-    "block is never lost. Memory lines are sent as UNTRUSTED DATA, and enabling "
-    "this sends pending block lines to the selected provider (network egress, "
-    "tokens/cost). The local extractor is lossy for detail: a summary can omit "
-    "facts from its block even though the raw LOG.txt records survive and "
-    "optmem_zoom walks back down to them."
+    "Off by default, and only meaningful together with auto-compaction: "
+    "`llm_summary` only selects WHICH summarizer the auto path uses when "
+    "`auto_nap` is true — it is NOT a standalone activation. With `auto_nap` off "
+    "(the default) nothing is summarized in the background and this setting does "
+    "nothing. When BOTH `auto_nap` and `llm_summary` are true AND the host exposes "
+    "its supported PluginLlm facade, pending decay blocks are summarized by the "
+    "host LLM through that facade, routed by the plugin-owned native auxiliary task "
+    "`optmem_summary`. The task slot defaults to provider `auto` / model `''` (the "
+    "host's configured model); set provider/model/timeout under "
+    "`auxiliary.optmem_summary` or pick the `OptMem summaries` task in "
+    "`hermes model`. The host owns auth, routing and fallback — the plugin supplies "
+    "no keys. When the facade is unavailable (a host that does not hand it to "
+    "memory providers, or a version-dependent private bridge that fails closed) or "
+    "the reply is an error, empty, multi-line or oversized, the local LLM-free "
+    "extractor runs instead, so a block is never lost. Memory lines are sent as "
+    "UNTRUSTED DATA, and only when BOTH settings are true does enabling this send "
+    "pending block lines to the selected provider (network egress, tokens/cost); "
+    "with either one off there is no egress and no cost. The local extractor is "
+    "lossy for detail: a summary can omit facts from its block even though the raw "
+    "LOG.txt records survive and optmem_zoom walks back down to them."
 )
 _SPLIT_INFO = (
     "Off by default. When a native MEMORY.md/USER.md entry exceeds 280 UTF-8 bytes the "
@@ -224,9 +234,12 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             key="auto_nap",
             label="Auto-compaction",
             kind=KIND_BOOL,
-            description="Drain pending decay blocks automatically every ~10 turns.",
+            description=(
+                "Opt-in: drain pending decay blocks automatically every ~10 turns. "
+                "Off = manual merges only (faithful upstream default)."
+            ),
             info=_NAP_INFO,
-            default="true",
+            default="false",
             inline=True,
             group="Compaction",
         ),
@@ -235,8 +248,10 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="LLM summaries",
             kind=KIND_BOOL,
             description=(
-                "Opt-in: summarize decay blocks with the host LLM (auxiliary task "
+                "Opt-in, and only meaningful with auto-compaction on: selects the "
+                "host-LLM summarizer for the `auto_nap` path (auxiliary task "
                 "`optmem_summary`; sends block lines to the selected provider). "
+                "Not a standalone activation — with `auto_nap` off it does nothing. "
                 "Off = the local LLM-free extractor."
             ),
             info=_LLM_INFO,
