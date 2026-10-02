@@ -447,7 +447,7 @@ class TestModeSwitch:
         assert "nudge_interval: 10" in text, "unrelated memory keys must survive"
         assert "# my precious config" in text, "comments must survive"
         assert "max_turns: 100" in text
-        assert "provider: optmem" in text
+        assert "provider: optmem-hermes" in text
         assert resolve_config(tmp_path).mode == "optmem-only"
         # Native files are never deleted.
         assert (tmp_path / "memories" / "MEMORY.md").exists()
