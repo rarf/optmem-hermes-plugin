@@ -23,7 +23,9 @@ import contextlib
 import datetime
 import os
 import re
+import stat
 import sys
+import tempfile
 import unicodedata
 from collections import defaultdict
 
@@ -64,12 +66,70 @@ class WakeNeedsCompression(Exception):
 # Portable advisory lock
 # ---------------------------------------------------------------------------
 
+PRIVATE_FILE_MODE = 0o600
+PRIVATE_DIR_MODE = 0o700
+
+
+def _restrict_store_mode(path: str, mode: int, *, directory: bool = False) -> None:
+    """Restrict an existing store path without following file symlinks.
+
+    Windows uses inherited ACLs rather than POSIX permission bits, so chmod is
+    skipped there.
+    """
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(metadata.st_mode):
+        if directory:
+            return  # A user may place the whole store on a symlinked volume.
+        raise OSError(f"refusing symlink in OptMem store: {path}")
+    if directory and not stat.S_ISDIR(metadata.st_mode):
+        raise OSError(f"OptMem store directory is not a directory: {path}")
+    if not directory and not stat.S_ISREG(metadata.st_mode):
+        raise OSError(f"OptMem store file is not a regular file: {path}")
+    if os.name != "nt":
+        if os.chmod in os.supports_follow_symlinks:
+            os.chmod(path, mode, follow_symlinks=False)
+        else:
+            os.chmod(path, mode)
+
+
+def _open_store_file(path: str, mode: str, flags: int, *, encoding: str | None = None):
+    """Open a regular store file and set its mode on the opened descriptor."""
+    if "b" in mode:
+        flags |= getattr(os, "O_BINARY", 0)
+    if os.name == "nt":
+        if os.path.islink(path):
+            raise OSError(f"refusing symlink in OptMem store: {path}")
+    else:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, PRIVATE_FILE_MODE)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(f"OptMem store path is not a regular file: {path}")
+        if os.name != "nt":
+            os.fchmod(descriptor, PRIVATE_FILE_MODE)
+        if encoding is None:
+            return os.fdopen(descriptor, mode)
+        return os.fdopen(descriptor, mode, encoding=encoding)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
+        raise
+
+
 def _make_lock(path: str):
     """Return a context manager granting an exclusive lock on ``path``.
 
     Uses msvcrt on Windows, fcntl on Unix. No-op if neither is importable.
     """
-    lockf = open(os.path.join(os.path.dirname(path) or ".", ".lock"), "a")  # noqa: SIM115
+    lock_path = os.path.join(os.path.dirname(path) or ".", ".lock")
+    lockf = _open_store_file(
+        lock_path,
+        "a",
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+    )
     if sys.platform == "win32":
         try:
             import msvcrt
@@ -275,10 +335,27 @@ class OptMemEngine:
 
     def __init__(self, memory_dir: str):
         self.dir = memory_dir
-        os.makedirs(os.path.join(self.dir, "TREE"), exist_ok=True)
+        os.makedirs(self.dir, mode=PRIVATE_DIR_MODE, exist_ok=True)
+        _restrict_store_mode(self.dir, PRIVATE_DIR_MODE, directory=True)
+        tree_dir = os.path.join(self.dir, "TREE")
+        os.makedirs(tree_dir, mode=PRIVATE_DIR_MODE, exist_ok=True)
+        _restrict_store_mode(tree_dir, PRIVATE_DIR_MODE, directory=True)
+        with os.scandir(tree_dir) as entries:
+            for entry in entries:
+                if entry.is_symlink():
+                    raise OSError(f"refusing symlink in OptMem tree: {entry.path}")
+                _restrict_store_mode(entry.path, PRIVATE_FILE_MODE)
+
         self.log_path = os.path.join(self.dir, "LOG.txt")
-        if not os.path.exists(self.log_path):
-            open(self.log_path, "a").close()
+        with _open_store_file(
+            self.log_path,
+            "a",
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        ):
+            pass
+        for existing in (os.path.join(self.dir, ".lock"), os.path.join(self.dir, "config")):
+            if os.path.lexists(existing):
+                _restrict_store_mode(existing, PRIVATE_FILE_MODE)
 
     # -- low level ----------------------------------------------------------
 
@@ -300,7 +377,7 @@ class OptMemEngine:
         except FileNotFoundError:
             return
         if n % rec:
-            with open(path, "r+b") as f:
+            with _open_store_file(path, "r+b", os.O_RDWR) as f:
                 f.truncate(n - n % rec)
 
     def _log_slice(self, lo: int, hi: int) -> list[tuple[int, str, str]]:
@@ -343,7 +420,7 @@ class OptMemEngine:
             self._repair(p, TREE_REC)
             if self._count(p, TREE_REC) != lo // size:
                 return False
-            with open(p, "ab") as f:
+            with _open_store_file(p, "ab", os.O_WRONLY | os.O_CREAT | os.O_APPEND) as f:
                 f.write(_pad(text, TREE_REC))
                 f.flush()
                 os.fsync(f.fileno())
@@ -366,7 +443,9 @@ class OptMemEngine:
         with self._lock():
             self._repair(self.log_path, LOG_REC)
             base = self.log_len()
-            with open(self.log_path, "ab") as f:
+            with _open_store_file(
+                self.log_path, "ab", os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            ) as f:
                 f.write(_pad(f"#{base} {date} {text}", LOG_REC))
                 f.flush()
                 os.fsync(f.fileno())
@@ -377,7 +456,9 @@ class OptMemEngine:
             with self._lock():
                 self._repair(self.log_path, LOG_REC)
                 base = self.log_len()
-                with open(self.log_path, "ab") as f:
+                with _open_store_file(
+                    self.log_path, "ab", os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                ) as f:
                     for k, (date, text) in enumerate(lines):
                         f.write(_pad(f"#{base + k} {date} {text}", LOG_REC))
                     f.flush()
@@ -579,7 +660,7 @@ class OptMemEngine:
                 )
             if self._count(p, TREE_REC) != lo // size:
                 return "race"
-            with open(p, "ab") as f:
+            with _open_store_file(p, "ab", os.O_WRONLY | os.O_CREAT | os.O_APPEND) as f:
                 f.write(_pad(summary, TREE_REC))
                 f.flush()
                 os.fsync(f.fileno())
@@ -605,7 +686,7 @@ class OptMemEngine:
                 n = self._count(p, TREE_REC)
                 if n > k:
                     gone += [(i * size, (i + 1) * size) for i in range(k, n)]
-                    with open(p, "r+b") as f:
+                    with _open_store_file(p, "r+b", os.O_RDWR) as f:
                         f.truncate(k * TREE_REC)
                 size *= 2
         return gone
@@ -882,10 +963,25 @@ class OptMemEngine:
         for k, (default, what) in self.KNOBS.items():
             prefix = "" if k in over else "# "
             out.append(f"{prefix}{k:<12} = {over.get(k, default):<6} # {what}")
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(out) + "\n")
-        os.replace(tmp, path)
+        fd, tmp = tempfile.mkstemp(
+            prefix=".config-", suffix=".tmp", dir=os.path.dirname(path) or "."
+        )
+        try:
+            if os.name != "nt":
+                os.fchmod(fd, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd = -1  # The stream owns the descriptor now.
+                f.write("\n".join(out) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
     def init_store(self) -> bool:
         """Create the store deliberately (mirrors memo init). Returns True if fresh."""
@@ -894,10 +990,18 @@ class OptMemEngine:
         # Fresh means the store (LOG.txt) did not already exist. The TREE/
         # subdir is created eagerly by __init__, so don't key off is_dir().
         fresh = not (d / "LOG.txt").exists()
-        (d / "TREE").mkdir(parents=True, exist_ok=True)
-        open(os.path.join(d, "LOG.txt"), "a").close()
-        if not (d / "config").exists():
+        (d / "TREE").mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+        with _open_store_file(
+            os.path.join(self.dir, "LOG.txt"),
+            "a",
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        ):
+            pass
+        config_path = os.path.join(self.dir, "config")
+        if not os.path.exists(config_path):
             self.write_config({})
+        else:
+            _restrict_store_mode(config_path, PRIVATE_FILE_MODE)
         return fresh
 
     def parse_import_lines(self, lines: list[str]) -> list[tuple[str, str]]:
@@ -949,7 +1053,9 @@ class OptMemEngine:
             rec = f"#{mid} {date} {text}".encode()
             if len(rec) > LOG_REC - 1:
                 raise ValueError(f"entry too long: {len(rec)} bytes")
-            with open(os.path.join(self.dir, "LOG.txt"), "r+b") as f:
+            with _open_store_file(
+                os.path.join(self.dir, "LOG.txt"), "r+b", os.O_RDWR
+            ) as f:
                 f.seek(mid * LOG_REC)
                 f.write(rec)
                 f.write(b" " * (LOG_REC - len(rec) - 1))

@@ -125,16 +125,6 @@ SUMMARY_TEMPERATURE = 0.1
 SUMMARY_PURPOSE = "optmem.auto_nap"
 
 
-def _load_plugin_config() -> dict:
-    try:
-        from hermes_cli.config import cfg_get, load_config
-
-        config = load_config()
-        return cfg_get(config, "plugins", "optmem", default={}) or {}
-    except Exception:
-        return {}
-
-
 def _get_hermes_home() -> str:
     """Return HERMES_HOME, using the Hermes helper when available else env/default."""
     return default_hermes_home()
@@ -1016,7 +1006,7 @@ class OptMemProvider(MemoryProvider):
         try:
             # Resolve the memory dir (mirror initialize) so init works even
             # before the provider has been wired into a session.
-            home = _get_hermes_home()
+            home = getattr(self, "_hermes_home", None) or _get_hermes_home()
             mem_dir = self._config.memory_dir or f"{home}/optmem_memory"
             if isinstance(mem_dir, str):
                 mem_dir = mem_dir.replace("$HERMES_HOME", home).replace("${HERMES_HOME}", home)
