@@ -6,6 +6,8 @@ normalized BM25, decay compression, and the builtin-memory mirror hook.
 """
 
 import json
+import os
+import stat
 import types
 
 import pytest
@@ -136,6 +138,52 @@ class TestOptMemEngine:
         eng.append("registro de largura fixa")
         log = tmp_path / "LOG.txt"
         assert log.stat().st_size == 320  # LOG_REC
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not portable on Windows")
+    def test_store_files_are_private_and_existing_files_are_restricted(self, tmp_path):
+        old_umask = os.umask(0o022)
+        try:
+            store = tmp_path / "store"
+            eng = OptMemEngine(str(store))
+            eng.append("private memory")
+            eng._tree_put(0, 2, "private summary")
+            eng.init_store()
+        finally:
+            os.umask(old_umask)
+
+        expected = {
+            store: 0o700,
+            store / "TREE": 0o700,
+            store / "LOG.txt": 0o600,
+            store / ".lock": 0o600,
+            store / "TREE" / "2": 0o600,
+            store / "config": 0o600,
+        }
+        actual = {path: stat.S_IMODE(path.stat().st_mode) for path in expected}
+        assert actual == expected
+
+        for path in expected:
+            os.chmod(path, 0o755 if path.is_dir() else 0o644)
+        OptMemEngine(str(store))
+        actual_existing = {path: stat.S_IMODE(path.stat().st_mode) for path in expected}
+        assert actual_existing == expected
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink permissions vary on Windows")
+    def test_write_config_does_not_follow_symlink_temp(self, tmp_path):
+        store = tmp_path / "store"
+        eng = OptMemEngine(str(store))
+        victim = tmp_path / "unrelated.txt"
+        victim.write_text("keep me", encoding="utf-8")
+        try:
+            (store / "config.tmp").symlink_to(victim)
+        except OSError:
+            pytest.skip("symlink creation is not permitted")
+
+        eng.write_config({"WAKE_LINES": 48})
+
+        assert victim.read_text(encoding="utf-8") == "keep me"
+        assert (store / "config.tmp").is_symlink()
+        assert "WAKE_LINES" in (store / "config").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +371,21 @@ class TestOptMemProviderLifecycle:
         p2 = OptMemProvider(config={"memory_dir": str(mem_dir)})
         fresh2 = p2.handle_tool_call("optmem_init", {})
         assert json.loads(fresh2)["fresh"] is False
+
+    def test_init_uses_the_initialized_profile_home(self, tmp_path, monkeypatch):
+        profile_home = tmp_path / "profiles" / "work"
+        profile_home.mkdir(parents=True)
+        provider = OptMemProvider(config={"memory_dir": "$HERMES_HOME/custom_memory"})
+        provider.initialize("work-session", hermes_home=str(profile_home))
+
+        def global_home_must_not_be_used():
+            pytest.fail("initialized provider should use its profile home")
+
+        monkeypatch.setattr("optmem._get_hermes_home", global_home_must_not_be_used)
+        result = json.loads(provider.handle_tool_call("optmem_init", {}))
+
+        assert result["memory_dir"] == str(profile_home / "custom_memory")
+        assert (profile_home / "custom_memory" / "LOG.txt").exists()
 
     def test_import_lines_from_file(self, tmp_path):
         p = _make_provider(tmp_path)
