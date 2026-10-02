@@ -291,14 +291,89 @@ class TestOptMemProviderLifecycle:
 
     def test_import_lines_from_file(self, tmp_path):
         p = _make_provider(tmp_path)
-        import_file = tmp_path / "bootstrap.txt"
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        import_file = import_dir / "bootstrap.txt"
         import_file.write_text(
             "2026-01-01 facto A duravel\n2026-02-01 facto B duravel\n",
             encoding="utf-8",
         )
-        res = json.loads(p.handle_tool_call("optmem_import", {"file": str(import_file)}))
+        res = json.loads(p.handle_tool_call("optmem_import", {"file": "bootstrap.txt"}))
         assert res["status"] == "imported"
         assert res["count"] == 2
+
+    def test_import_tool_refuses_absolute_and_parent_paths(self, tmp_path):
+        p = _make_provider(tmp_path)
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        outside = tmp_path / "credentials.txt"
+        outside.write_text("2026-01-01 private-value\n", encoding="utf-8")
+
+        assert p._engine is not None
+        for requested in (str(outside), "../../credentials.txt"):
+            result = json.loads(p.handle_tool_call("optmem_import", {"file": requested}))
+            assert "error" in result
+            assert p._engine.log_len() == 0
+
+    def test_import_tool_refuses_symlinks_outside_import_directory(self, tmp_path):
+        p = _make_provider(tmp_path)
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        outside = tmp_path / "credentials.txt"
+        outside.write_text("2026-01-01 private-value\n", encoding="utf-8")
+        link = import_dir / "linked.txt"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlink creation is not permitted")
+
+        assert p._engine is not None
+        result = json.loads(p.handle_tool_call("optmem_import", {"file": "linked.txt"}))
+        assert "error" in result
+        assert p._engine.log_len() == 0
+
+    def test_import_tool_rejects_oversize_before_parsing(self, tmp_path, monkeypatch):
+        p = _make_provider(tmp_path)
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        oversized = import_dir / "oversized.txt"
+        oversized.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+
+        assert p._engine is not None
+
+        def parser_must_not_run(_lines):
+            pytest.fail("oversized import was parsed")
+
+        monkeypatch.setattr(p._engine, "import_lines", parser_must_not_run)
+        result = json.loads(p.handle_tool_call("optmem_import", {"file": "oversized.txt"}))
+        assert "error" in result
+        assert "4 MiB" in result["error"]
+
+    def test_import_tool_rejects_fifo_without_blocking(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO files are unavailable on this platform")
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        os.mkfifo(import_dir / "blocked.txt")
+        code = (
+            "import json, os, sys; from pathlib import Path; from optmem import OptMemProvider; "
+            "home = Path(sys.argv[1]); os.chdir(home / 'optmem' / 'imports'); "
+            "provider = OptMemProvider(config={'memory_dir': str(home / 'store')}); "
+            "provider.initialize('fifo-test', hermes_home=str(home)); "
+            "print(provider.handle_tool_call('optmem_import', {'file': 'blocked.txt'}))"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=3,
+        )
+        assert "error" in json.loads(completed.stdout)
 
     def test_block_lines_returns_raw_lines(self, tmp_path):
         p = _make_provider(tmp_path)
