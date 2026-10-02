@@ -281,6 +281,9 @@ class TestPlatformSupport:
         classifiers = project["project"]["classifiers"]
         assert "Operating System :: MacOS" in classifiers
 
+    def test_plugin_manifest_declares_verified_hermes_version_floor(self):
+        assert _load_manifest()["requires_hermes"] == ">=0.21.2"
+
 
 class TestHostValidate:
     def test_validate_plugin_dir_passes_the_capability_probe(self):
