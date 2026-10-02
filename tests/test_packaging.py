@@ -16,6 +16,7 @@ from __future__ import annotations
 import email
 import shutil
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -99,6 +100,22 @@ def test_wheel_metadata_name_and_version(wheel: Path):
     from optmem import __version__
 
     assert msg["Version"] == __version__
+
+
+def test_package_release_version_sources_match_v0_3_3():
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    plugin_manifest = (PROJECT_ROOT / "optmem" / "plugin.yaml").read_text(encoding="utf-8")
+    manifest_version = next(
+        value.strip().strip("'\"")
+        for line in plugin_manifest.splitlines()
+        for key, separator, value in [line.partition(":")]
+        if separator and key.strip() == "version"
+    )
+    from optmem import __version__
+
+    assert project["project"]["version"] == "0.3.3"
+    assert manifest_version == "0.3.3"
+    assert __version__ == "0.3.3"
 
 
 def test_installed_package_imports_from_wheel(tmp_path, wheel: Path):

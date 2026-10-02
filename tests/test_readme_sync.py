@@ -19,3 +19,10 @@ def test_readme_documents_catalog_install_only_when_listed():
     assert 'pip install "git+https://github.com/rarf/optmem-hermes-plugin@v' in source
     assert "not yet in the Hermes catalog" not in source
 
+
+def test_all_install_guides_pin_the_current_v0_3_3_release():
+    root = Path(__file__).resolve().parents[1]
+    install_command = 'pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.3"'
+    for relative in ("README.md", "optmem/README.md", "docs/reference.md"):
+        assert install_command in (root / relative).read_text(encoding="utf-8")
+

@@ -43,7 +43,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 
 # Hermes-only dependencies. The plugin must import cleanly in a bare CI

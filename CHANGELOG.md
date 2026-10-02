@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-10-02
+
+### Fixed
+- Mode switches keep `memory.provider` set to the registered `optmem-hermes` provider.
+- The model-facing import tool reads only regular files in
+  `<HERMES_HOME>/optmem/imports/`, with a 4 MiB cap; symlinks and special files
+  are refused. The explicit-path CLI import is unchanged.
+- Import validation errors report the line number and reason without echoing
+  the source line or its dates.
+- `update_memory_config` changes only direct children of the top-level
+  `memory:` block.
+- Store files use `0600` and directories `0700` on POSIX. Config writes use a
+  private temporary file and atomic replacement.
+- `optmem_init` uses the provider's initialized profile home.
+
+### Changed
+- Add a verified `requires_hermes: ">=0.21.2"` floor and macOS support.
+- Document catalog installation when the plugin is listed, with a release-tag
+  fallback otherwise.
+- Remove the unused `_load_plugin_config` helper.
+
 ## [0.3.2] - 2026-10-01
 
 ### Changed

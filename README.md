@@ -18,7 +18,7 @@ hermes plugins install optmem-hermes
 If it is not listed in your catalog, install a published release into the Python environment used by Hermes:
 
 ```bash
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.2"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.3"
 ```
 
 Select the provider in your profile's `config.yaml`, then restart that profile's Hermes process:
