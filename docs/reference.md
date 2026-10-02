@@ -62,15 +62,12 @@ off by default — can send pending block lines to a model you select; see
 
 ### 1. Install (from a pinned source commit)
 
-> **Install the published tag.** `v0.3.2` is the release that matches upstream
-> compaction (manual by default). There is no PyPI artifact; install from the tag.
->
-> **Not in the Hermes plugin catalog yet.** `hermes plugins install optmem-hermes`
-> is not a working install path until the catalog PR is merged. Until then, use
-> the tag below.
+> **Install the published release.** `v0.3.3` keeps compaction manual by default.
+> If `optmem-hermes` is listed in your Hermes catalog, use
+> `hermes plugins install optmem-hermes`; otherwise install the GitHub tag below.
 
 ```bash
-pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.2"
+pip install "git+https://github.com/rarf/optmem-hermes-plugin@v0.3.3"
 
 # ...or from a pinned source checkout
 git clone https://github.com/rarf/optmem-hermes-plugin.git
