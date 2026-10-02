@@ -903,8 +903,9 @@ class OptMemEngine:
     def parse_import_lines(self, lines: list[str]) -> list[tuple[str, str]]:
         """Validate ``YYYY-MM-DD <text>`` lines without writing (atomic import).
 
-        Raises ``ValueError`` naming the offending line. Kept separate so callers
-        can validate, de-duplicate and report before appending anything.
+        Raises ``ValueError`` with only the offending line number and reason.
+        Kept separate so callers can validate, de-duplicate and report before
+        appending anything.
         """
         recs = self._all_records()
         last = recs[-1][1] if recs else "0000-00-00"
@@ -915,19 +916,19 @@ class OptMemEngine:
                 continue
             date, _, text = line.partition(" ")
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-                raise ValueError(f"line {i}: expected 'YYYY-MM-DD <text>', got: {line}")
+                raise ValueError(f"line {i}: expected 'YYYY-MM-DD <text>'")
             try:
                 datetime.datetime.strptime(date, "%Y-%m-%d")
             except ValueError as err:
-                raise ValueError(f"line {i}: {date} is not a real date.") from err
+                raise ValueError(f"line {i}: date is not a real calendar date") from err
             if date < last:
-                raise ValueError(f"line {i}: date {date} precedes previous ({last}).")
+                raise ValueError(f"line {i}: date precedes the previous memory")
             text = text.strip()
             if not text:
                 raise ValueError(f"line {i}: empty text")
             byte_len = len(text.encode("utf-8"))
             if byte_len > ENTRY_CHARS:
-                raise ValueError(f"line {i}: {byte_len} bytes, limit {ENTRY_CHARS}.")
+                raise ValueError(f"line {i}: text exceeds the {ENTRY_CHARS}-byte limit")
             parsed.append((date, text))
             last = date
         return parsed

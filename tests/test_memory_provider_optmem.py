@@ -37,6 +37,41 @@ class TestOptMemEngine:
         with pytest.raises(ValueError):
             eng.append("x" * 400)
 
+    @pytest.mark.parametrize(
+        ("line", "previous_date", "private_parts", "reason"),
+        [
+            ("not-a-date TOP_SECRET", None, ("not-a-date", "TOP_SECRET"), "expected"),
+            ("2026-02-31 DATE_SECRET", None, ("2026-02-31", "DATE_SECRET"), "date"),
+            (
+                "2025-12-31 ORDER_SECRET",
+                "2026-01-01",
+                ("2025-12-31", "2026-01-01", "ORDER_SECRET"),
+                "previous",
+            ),
+            (
+                "2026-01-01 " + "x" * 281,
+                None,
+                ("2026-01-01", "x" * 281, "281 bytes"),
+                "exceeds",
+            ),
+        ],
+    )
+    def test_parse_import_errors_report_only_line_and_reason(
+        self, tmp_path, line, previous_date, private_parts, reason
+    ):
+        eng = OptMemEngine(str(tmp_path))
+        if previous_date:
+            eng.append("safe existing memory", date=previous_date)
+
+        with pytest.raises(ValueError) as caught:
+            eng.parse_import_lines([line])
+
+        message = str(caught.value)
+        assert "line 1" in message
+        assert reason in message
+        assert line not in message
+        assert all(part not in message for part in private_parts)
+
     def test_bm25_accent_normalization(self, tmp_path):
         eng = OptMemEngine(str(tmp_path))
         eng.append("a caçula chegou cedo")  # id 0
@@ -301,6 +336,19 @@ class TestOptMemProviderLifecycle:
         res = json.loads(p.handle_tool_call("optmem_import", {"file": "bootstrap.txt"}))
         assert res["status"] == "imported"
         assert res["count"] == 2
+
+    def test_model_import_error_does_not_echo_source_line(self, tmp_path):
+        p = _make_provider(tmp_path)
+        import_dir = tmp_path / "optmem" / "imports"
+        import_dir.mkdir(parents=True)
+        (import_dir / "malformed.txt").write_text(
+            "not-a-date GIT_CREDENTIAL_SECRET", encoding="utf-8"
+        )
+
+        result = json.loads(p.handle_tool_call("optmem_import", {"file": "malformed.txt"}))
+        assert "error" in result
+        assert "line 1" in result["error"]
+        assert "GIT_CREDENTIAL_SECRET" not in json.dumps(result)
 
     def test_import_tool_refuses_absolute_and_parent_paths(self, tmp_path):
         p = _make_provider(tmp_path)
