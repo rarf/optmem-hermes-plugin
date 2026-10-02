@@ -9,7 +9,7 @@ The local `optmem-hermes.yaml` records the published release used by that PR. Fo
 - Category `memory`, tier `community`, maintainer `rarf`.
 - Canonical manifest/provider/catalog name: `optmem-hermes`. Python package and existing data paths retain their names. The CLI becomes `hermes optmem-hermes`.
 - `subdir: optmem`: the catalog renders `optmem/README.md` at the reviewed pin.
-- Linux and Windows match CI coverage. Minimum Hermes version is omitted until verified.
+- Linux and Windows are covered by CI; the full test suite passed on a native macOS host. Minimum Hermes version is omitted until verified.
 - The entry tracks the latest published release, not an unmerged cleanup branch. Update the SHA, version and image pin together after publishing a new release.
 
 Proposed GitHub topics: `hermes-agent`, `hermes-plugin`, `memory-provider`, `agent-memory`, `optmem`, `local-first`, `append-only`, `bm25`, `python`.

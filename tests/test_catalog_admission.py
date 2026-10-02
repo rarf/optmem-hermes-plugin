@@ -272,6 +272,16 @@ class TestDeclaredCapabilities:
 # ---------------------------------------------------------------------------
 
 
+class TestPlatformSupport:
+    def test_catalog_claims_only_declared_supported_platforms(self):
+        entry = _load_yaml(PROJECT_ROOT / "docs" / "catalog" / "optmem-hermes.yaml")
+        assert set(entry["platforms"]) == {"linux", "macos", "windows"}
+
+        project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        classifiers = project["project"]["classifiers"]
+        assert "Operating System :: MacOS" in classifiers
+
+
 class TestHostValidate:
     def test_validate_plugin_dir_passes_the_capability_probe(self):
         host_validate = pytest.importorskip("hermes_cli.plugin_validate")

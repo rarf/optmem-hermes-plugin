@@ -23,7 +23,7 @@ version: "0.3.1"
 image: https://raw.githubusercontent.com/rarf/optmem-hermes-plugin/125d859ddd1813930a871de2c5b3d213e3d09336/docs/assets/catalog-banner-card.png
 screenshots: []
 readme: true
-platforms: [linux, windows]
+platforms: [linux, macos, windows]
 capabilities:
   provides_tools:
     - optmem_note
