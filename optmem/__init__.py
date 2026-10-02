@@ -92,6 +92,7 @@ from .engine import (
     OptMemEngine,
     validate_block,
 )
+from .import_security import read_model_import_lines
 
 logger = logging.getLogger(__name__)
 
@@ -306,13 +307,17 @@ CONFIG_SCHEMA = {
 IMPORT_SCHEMA = {
     "name": "optmem_import",
     "description": (
-        "Bulk-load historical memories from a file of 'YYYY-MM-DD <text>' lines "
-        "(one identity bootstrap, used once). Mirrors `memo import`."
+        "Bulk-load historical memories from a file in "
+        "<HERMES_HOME>/optmem/imports/. Pass its file name; use the "
+        "user-driven `hermes optmem-hermes import <file>` command for other paths."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "file": {"type": "string", "description": "Path to the import file."},
+            "file": {
+                "type": "string",
+                "description": "File name inside <HERMES_HOME>/optmem/imports/.",
+            },
         },
         "required": ["file"],
     },
@@ -998,9 +1003,8 @@ class OptMemProvider(MemoryProvider):
 
     def _handle_import(self, args: dict) -> str:
         try:
-            path = args["file"]
-            with open(path, encoding="utf-8") as f:
-                lines = f.readlines()
+            home = getattr(self, "_hermes_home", None) or _get_hermes_home()
+            lines = read_model_import_lines(home, args["file"])
             added = self._engine.import_lines(lines)
             return _json({"status": "imported", "count": added})
         except (KeyError, ValueError, FileNotFoundError, UnicodeDecodeError) as exc:
