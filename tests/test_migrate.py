@@ -38,6 +38,7 @@ from optmem.migrate import (
     readiness,
     rollback_mode,
     split_long_entry,
+    update_memory_config,
 )
 
 TODAY = _date.today().isoformat()
@@ -395,6 +396,25 @@ class TestApplyAndReadiness:
 # --------------------------------------------------------------------------- #
 # mode switch
 # --------------------------------------------------------------------------- #
+
+
+class TestMemoryConfigUpdates:
+    def test_updates_only_direct_memory_children(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            "memory:\n"
+            "  provider_settings:\n"
+            "    nested:\n"
+            "      provider: nested-value\n"
+            "  memory_enabled: true\n",
+            encoding="utf-8",
+        )
+
+        update_memory_config(tmp_path, {"provider": "optmem-hermes"})
+
+        text = path.read_text(encoding="utf-8")
+        assert "  provider: optmem-hermes\n" in text
+        assert "      provider: nested-value\n" in text
 
 
 def _config_yaml(home: Path, **values) -> Path:

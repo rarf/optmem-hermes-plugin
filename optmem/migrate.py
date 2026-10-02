@@ -544,7 +544,7 @@ def _memory_block_bounds(lines: list[str]) -> tuple[int, int] | None:
 def update_memory_config(
     hermes_home: str | os.PathLike[str], updates: Mapping[str, str | int | bool]
 ) -> Path:
-    """Set keys under the top-level ``memory:`` block, preserving everything else.
+    """Set direct children of the top-level ``memory:`` block, preserving everything else.
 
     Comments, key order, unrelated top-level sections and unrelated keys inside
     ``memory:`` all survive. The file is replaced atomically. Refuses (without
@@ -566,13 +566,14 @@ def update_memory_config(
         lines.extend(block)
     else:
         start, end = bounds
-        indent = "  "
-        for i in range(start + 1, end):
-            if lines[i].strip():
-                indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
-                break
+        child_indents = [
+            lines[i][: len(lines[i]) - len(lines[i].lstrip(" \t"))]
+            for i in range(start + 1, end)
+            if lines[i].strip() and not lines[i].lstrip().startswith("#")
+        ]
+        indent = min(child_indents, key=len) if child_indents else "  "
         for key, value in updates.items():
-            pattern = re.compile(rf"^(\s*){re.escape(key)}:\s*.*$")
+            pattern = re.compile(rf"^{re.escape(indent)}{re.escape(key)}:\s*.*$")
             replaced = False
             for i in range(start + 1, end):
                 if pattern.match(lines[i]):
